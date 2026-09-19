@@ -1,0 +1,22 @@
+# ===== 密钥 / 敏感配置 =====
+.env
+.env.*
+!.env.example
+
+# ===== Python =====
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ===== macOS =====
+.DS_Store
+
+# ===== 运行时数据（体积大 / 可再生成）=====
+calculate_logic/fetch_knowledge/parse_result/
+upload_kb/
+logs/
+*.log
+
+# ===== 临时脚本（含硬编码密钥）=====
+test.py
