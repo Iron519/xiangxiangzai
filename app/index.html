@@ -1395,18 +1395,37 @@
   </div>
 </div>
 
-<!-- 登录弹窗（手机验证码 / 微信） -->
+<!-- 登录弹窗（账号密码 / 手机验证码 / 微信） -->
 <div class="modal-overlay" id="authModal" style="display:none;z-index:2000">
   <div class="modal-dialog" style="max-width:400px">
     <div class="modal-header">
       <div style="display:flex;gap:16px">
-        <span class="auth-tab" id="authTabPhone" onclick="switchAuthTab('phone')" style="cursor:pointer;padding-bottom:4px;border-bottom:2px solid var(--c-brand);font-weight:600">手机验证码</span>
+        <span class="auth-tab" id="authTabPassword" onclick="switchAuthTab('password')" style="cursor:pointer;padding-bottom:4px;border-bottom:2px solid var(--c-brand);font-weight:600">账号密码</span>
+        <span class="auth-tab" id="authTabPhone" onclick="switchAuthTab('phone')" style="cursor:pointer;padding-bottom:4px;color:var(--c-text-3)">手机验证码</span>
         <span class="auth-tab" id="authTabWechat" onclick="switchAuthTab('wechat')" style="cursor:pointer;padding-bottom:4px;color:var(--c-text-3)">微信登录</span>
       </div>
     </div>
     <div class="modal-body">
+      <!-- 账号密码面板 -->
+      <div id="authPanelPassword">
+        <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">用户名</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input type="text" class="modal-input" id="authUsername" placeholder="3-30 位字母/数字/下划线" style="flex:1" />
+        </div>
+        <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">密码</label>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input type="password" class="modal-input" id="authPwd" placeholder="至少 6 位密码" style="flex:1" />
+        </div>
+        <div id="authConfirmPwdWrap" style="display:none">
+          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">确认密码</label>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="password" class="modal-input" id="authConfirmPwd" placeholder="再次输入密码" style="flex:1" />
+          </div>
+        </div>
+        <p class="modal-hint" id="authPwdHint" style="margin:2px 0 0;font-size:var(--fs-xs);color:var(--c-text-2)"></p>
+      </div>
       <!-- 手机验证码面板 -->
-      <div id="authPanelPhone">
+      <div id="authPanelPhone" style="display:none">
         <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">手机号</label>
         <div style="display:flex;gap:8px;margin-bottom:12px">
           <input type="tel" class="modal-input" id="authPhone" placeholder="请输入手机号" style="flex:1" />
@@ -1428,7 +1447,10 @@
     <div class="modal-footer">
       <button class="btn-secondary" id="authCancel" onclick="closeLogin()">取消</button>
       <button class="btn-primary" id="authWechatMp" onclick="wechatMpLogin()" style="display:none">微信授权登录</button>
-      <button class="btn-primary" id="authSmsLogin" onclick="smsLogin()">登录</button>
+      <button class="btn-primary" id="authSmsLogin" onclick="smsLogin()" style="display:none">登录</button>
+      <button class="btn-primary" id="authPwdLogin" onclick="passwordLogin()">登录</button>
+      <button class="btn-secondary" id="authSwitchToRegister" onclick="switchToRegister()" style="display:none">注册</button>
+      <button class="btn-primary" id="authDoRegister" onclick="passwordRegister()" style="display:none">注册</button>
     </div>
   </div>
 </div>

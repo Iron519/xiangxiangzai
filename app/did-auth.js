@@ -47,7 +47,8 @@
     const m = getEl('authModal');
     if (!m) return;
     m.style.display = 'flex';
-    switchAuthTab('phone');
+    _authMode = 'login';
+    switchAuthTab('password');
   }
 
   function closeLogin() {
@@ -55,23 +56,138 @@
     if (m) m.style.display = 'none';
   }
 
+  let _authMode = 'login'; // 'login' | 'register'
+
   function switchAuthTab(tab) {
+    const pwdTab = getEl('authTabPassword');
     const phoneTab = getEl('authTabPhone');
     const wxTab = getEl('authTabWechat');
+    const pwdPanel = getEl('authPanelPassword');
     const phonePanel = getEl('authPanelPhone');
     const wxPanel = getEl('authPanelWechat');
     const wxBtn = getEl('authWechatMp');
     const smsBtn = getEl('authSmsLogin');
-    if (!phoneTab || !phonePanel) return;
-    const isPhone = tab === 'phone';
-    phoneTab.style.borderBottom = isPhone ? '2px solid var(--c-brand)' : 'none';
-    phoneTab.style.color = isPhone ? 'var(--c-text)' : 'var(--c-text-3)';
-    phoneTab.style.fontWeight = isPhone ? '600' : '400';
-    phonePanel.style.display = isPhone ? '' : 'none';
-    wxPanel.style.display = isPhone ? 'none' : '';
-    if (wxTab) { wxTab.style.borderBottom = isPhone ? 'none' : '2px solid var(--c-brand)'; wxTab.style.color = isPhone ? 'var(--c-text-3)' : 'var(--c-text)'; wxTab.style.fontWeight = isPhone ? '400' : '600'; }
-    if (wxBtn) wxBtn.style.display = isPhone ? 'none' : '';
-    if (smsBtn) smsBtn.style.display = isPhone ? '' : 'none';
+    const pwdLoginBtn = getEl('authPwdLogin');
+    const switchRegisterBtn = getEl('authSwitchToRegister');
+    const doRegisterBtn = getEl('authDoRegister');
+    const confirmPwdWrap = getEl('authConfirmPwdWrap');
+
+    // 重置为登录模式
+    _authMode = 'login';
+    if (confirmPwdWrap) confirmPwdWrap.style.display = 'none';
+    if (switchRegisterBtn) switchRegisterBtn.style.display = 'none';
+    if (doRegisterBtn) doRegisterBtn.style.display = 'none';
+
+    // 隐藏所有面板
+    if (pwdPanel) pwdPanel.style.display = 'none';
+    if (phonePanel) phonePanel.style.display = 'none';
+    if (wxPanel) wxPanel.style.display = 'none';
+
+    // 隐藏所有操作按钮
+    if (wxBtn) wxBtn.style.display = 'none';
+    if (smsBtn) smsBtn.style.display = 'none';
+    if (pwdLoginBtn) pwdLoginBtn.style.display = 'none';
+
+    // 重置 tab 样式
+    const resetTab = (el) => { if (el) { el.style.borderBottom = 'none'; el.style.color = 'var(--c-text-3)'; el.style.fontWeight = '400'; } };
+    resetTab(pwdTab); resetTab(phoneTab); resetTab(wxTab);
+
+    const activateTab = (el) => { if (el) { el.style.borderBottom = '2px solid var(--c-brand)'; el.style.color = 'var(--c-text)'; el.style.fontWeight = '600'; } };
+
+    if (tab === 'password') {
+      activateTab(pwdTab);
+      if (pwdPanel) pwdPanel.style.display = '';
+      if (pwdLoginBtn) pwdLoginBtn.style.display = '';
+      if (switchRegisterBtn) switchRegisterBtn.style.display = '';
+    } else if (tab === 'phone') {
+      activateTab(phoneTab);
+      if (phonePanel) phonePanel.style.display = '';
+      if (smsBtn) smsBtn.style.display = '';
+    } else if (tab === 'wechat') {
+      activateTab(wxTab);
+      if (wxPanel) wxPanel.style.display = '';
+      if (wxBtn) wxBtn.style.display = '';
+    }
+  }
+
+  function switchToRegister() {
+    _authMode = 'register';
+    const confirmPwdWrap = getEl('authConfirmPwdWrap');
+    const pwdLoginBtn = getEl('authPwdLogin');
+    const switchRegisterBtn = getEl('authSwitchToRegister');
+    const doRegisterBtn = getEl('authDoRegister');
+    if (confirmPwdWrap) confirmPwdWrap.style.display = '';
+    if (pwdLoginBtn) pwdLoginBtn.style.display = 'none';
+    if (switchRegisterBtn) switchRegisterBtn.style.display = 'none';
+    if (doRegisterBtn) doRegisterBtn.style.display = '';
+  }
+
+  // 账号密码登录
+  async function passwordLogin() {
+    const usernameEl = getEl('authUsername');
+    const pwdEl = getEl('authPwd');
+    const hint = getEl('authPwdHint');
+    const username = (usernameEl && usernameEl.value || '').trim();
+    const password = (pwdEl && pwdEl.value || '');
+    if (!username || !password) {
+      if (hint) hint.textContent = '请输入用户名和密码';
+      return;
+    }
+    try {
+      const res = await fetch('/api/v1/auth/password/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (data.code !== 200 || !data.data || !data.data.access_token) {
+        if (hint) hint.textContent = data.message || '登录失败';
+        return;
+      }
+      setAccessToken(data.data.access_token);
+      closeLogin();
+      await fetchCurrentUser(true);
+      bootstrapApp();
+    } catch (e) {
+      if (hint) hint.textContent = '登录失败：' + e.message;
+    }
+  }
+
+  // 账号密码注册
+  async function passwordRegister() {
+    const usernameEl = getEl('authUsername');
+    const pwdEl = getEl('authPwd');
+    const confirmEl = getEl('authConfirmPwd');
+    const hint = getEl('authPwdHint');
+    const username = (usernameEl && usernameEl.value || '').trim();
+    const password = (pwdEl && pwdEl.value || '');
+    const confirmPwd = (confirmEl && confirmEl.value || '');
+    if (!username || !password) {
+      if (hint) hint.textContent = '请输入用户名和密码';
+      return;
+    }
+    if (password !== confirmPwd) {
+      if (hint) hint.textContent = '两次密码不一致';
+      return;
+    }
+    try {
+      const res = await fetch('/api/v1/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await res.json();
+      if (data.code !== 200 || !data.data || !data.data.access_token) {
+        if (hint) hint.textContent = data.message || '注册失败';
+        return;
+      }
+      setAccessToken(data.data.access_token);
+      closeLogin();
+      await fetchCurrentUser(true);
+      bootstrapApp();
+    } catch (e) {
+      if (hint) hint.textContent = '注册失败：' + e.message;
+    }
   }
 
   // 发送验证码 + 60s 倒计时

@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  my_agent_db:
+    image: pgvector/pgvector:pg18
+    container_name: PostgreSQL
+    environment:
+      POSTGRES_USER: yutiexin
+      POSTGRES_PASSWORD: YTX519PGmm
+      POSTGRES_DB: my_agent
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U yutiexin -d my_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  my_agent_python:
+    image: python:3.12-slim
+    container_name: Python
+    working_dir: /app
+    volumes:
+      - .:/app
+    command: sleep infinity
+
+volumes:
+  pg_data:

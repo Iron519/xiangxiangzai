@@ -1,0 +1,40 @@
+# Web 框架
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.32
+
+# 环境配置
+python-dotenv==1.2.4
+
+# 数据库
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
+pgvector==0.5.1
+
+# LLM / LangChain / LangGraph
+langchain-core==1.7.0
+langchain-openai==1.7.3
+langgraph==1.2.18
+langgraph-checkpoint-postgres==3.2.0
+openai==3.39.0
+
+# HTTP 客户端
+httpx==0.28.1
+requests==2.34.2
+urllib3==2.8.0
+
+# 鉴权
+bcrypt==5.0.0
+PyJWT==2.15.1
+
+# NLP / 检索
+jieba==0.42.1
+rank-bm25==0.2.2
+numpy==2.5.4
+
+# 日志
+concurrent-log-handler==0.9.31
+
+# 其他
+emoji==2.16.0
+PyMuPDF==2.0

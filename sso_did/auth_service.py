@@ -1,9 +1,11 @@
 import logging
 import os
 import random
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
+import bcrypt
 import psycopg
 from dotenv import load_dotenv, find_dotenv
 
@@ -22,6 +24,7 @@ logger = logging.getLogger("AuthService")
 
 IDENTITY_TABLE = os.getenv("PG_HRSSC_IDENTITY_TABLE", "hrssc_identity_mgmt")
 VERIFY_CODE_TABLE = os.getenv("PG_HRSSC_VERIFY_CODE_TABLE", "hrssc_verify_code_mgmt")
+PASSWORD_TABLE = os.getenv("PG_HRSSC_PASSWORD_TABLE", "hrssc_password_mgmt")
 
 SMS_DRIVER = os.getenv("SMS_DRIVER", "mock")
 VERIFY_CODE_TTL_MINUTES = int(os.getenv("VERIFY_CODE_TTL_MINUTES", "5"))
@@ -275,3 +278,164 @@ def bind_phone(user_id: int, phone: str, unionid: str | None = None) -> str:
         )
         conn.commit()
     return phone
+
+
+# ================= 账号密码注册/登录 =================
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,30}$")
+_PASSWORD_MIN_LEN = 6
+
+
+def _hash_password(plain: str) -> str:
+    """bcrypt 哈希密码，返回 utf-8 字符串。"""
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    """校验明文密码与 bcrypt 哈希是否匹配。"""
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+
+
+def _validate_username(username: str) -> str:
+    """校验用户名格式：3-30 位字母/数字/下划线。"""
+    username = (username or "").strip()
+    if not _USERNAME_RE.match(username):
+        raise ValueError("用户名需 3-30 位，仅支持字母、数字、下划线")
+    return username
+
+
+def _validate_password(password: str) -> str:
+    """校验密码强度：至少 6 位。"""
+    if not password or len(password) < _PASSWORD_MIN_LEN:
+        raise ValueError(f"密码至少 {_PASSWORD_MIN_LEN} 位")
+    return password
+
+
+def register_password_user(username: str, password: str, display_name: str | None = None) -> dict:
+    """账号密码注册：创建用户 + 绑定 password 身份 + 写入密码哈希。
+
+    account_id 使用用户名（唯一），identity provider='password'。
+    返回 sys_user 行。
+    """
+    username = _validate_username(username)
+    password = _validate_password(password)
+
+    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        # 检查用户名是否已存在（account_id 唯一）
+        cur.execute(f"SELECT id FROM {USER_TABLE} WHERE account_id=%s AND deleted=false", (username,))
+        if cur.fetchone():
+            raise ValueError("该用户名已被注册")
+        # 检查 password 身份是否已绑定
+        cur.execute(
+            f"SELECT 1 FROM {IDENTITY_TABLE} WHERE provider='password' AND identifier=%s AND deleted=false",
+            (username,),
+        )
+        if cur.fetchone():
+            raise ValueError("该用户名已被注册")
+
+        # 创建用户
+        cur.execute(
+            f"INSERT INTO {USER_TABLE} (account_id, display_name, status, deleted) "
+            f"VALUES (%s,%s,'Enabled',false) RETURNING id",
+            (username, display_name or username),
+        )
+        user_id = cur.fetchone()["id"]
+
+        # 绑定默认角色
+        cur.execute(
+            f"SELECT id FROM {ROLE_TABLE} WHERE code=%s AND deleted=false AND status='Enabled'",
+            (DEFAULT_ROLE,),
+        )
+        role_row = cur.fetchone()
+        if role_row:
+            cur.execute(
+                f"INSERT INTO {USER_ROLE_TABLE} (user_id, role_id, deleted) VALUES (%s,%s,false)",
+                (user_id, role_row["id"]),
+            )
+
+        # 绑定 password 身份
+        cur.execute(
+            f"INSERT INTO {IDENTITY_TABLE} (user_id, provider, identifier, status, deleted) "
+            f"VALUES (%s,'password',%s,'Enabled',false)",
+            (user_id, username),
+        )
+
+        # 写入密码哈希
+        cur.execute(
+            f"INSERT INTO {PASSWORD_TABLE} (user_id, password_hash, status, deleted) "
+            f"VALUES (%s,%s,'Enabled',false)",
+            (user_id, _hash_password(password)),
+        )
+
+        conn.commit()
+        logger.info(f"[Auth] 账号密码注册成功 username={username}, user_id={user_id}")
+        return {"id": user_id, "account_id": username, "display_name": display_name or username}
+
+
+def verify_password_login(username: str, password: str) -> dict:
+    """账号密码登录：校验用户名+密码，返回 sys_user 行。
+
+    失败抛 ValueError。
+    """
+    username = (username or "").strip()
+    if not username or not password:
+        raise ValueError("用户名和密码不能为空")
+
+    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        # 按 password 身份定位用户
+        cur.execute(
+            f"SELECT user_id FROM {IDENTITY_TABLE} "
+            f"WHERE provider='password' AND identifier=%s AND deleted=false AND status='Enabled'",
+            (username,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise ValueError("用户名或密码错误")
+        user_id = row["user_id"]
+
+        # 取密码哈希
+        cur.execute(
+            f"SELECT password_hash FROM {PASSWORD_TABLE} "
+            f"WHERE user_id=%s AND deleted=false AND status='Enabled'",
+            (user_id,),
+        )
+        pwd_row = cur.fetchone()
+        if not pwd_row:
+            raise ValueError("用户名或密码错误")
+
+        if not _verify_password(password, pwd_row["password_hash"]):
+            raise ValueError("用户名或密码错误")
+
+        # 取用户行
+        cur.execute(f"SELECT * FROM {USER_TABLE} WHERE id=%s AND deleted=false", (user_id,))
+        user = cur.fetchone()
+        if not user:
+            raise ValueError("用户不存在或已禁用")
+        if user.get("status") != "Enabled":
+            raise ValueError("账号已禁用，请联系管理员")
+
+        return user
+
+
+def change_password(user_id: int, old_password: str, new_password: str) -> None:
+    """修改密码：校验旧密码后更新。"""
+    new_password = _validate_password(new_password)
+    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        cur.execute(
+            f"SELECT password_hash FROM {PASSWORD_TABLE} "
+            f"WHERE user_id=%s AND deleted=false AND status='Enabled'",
+            (user_id,),
+        )
+        pwd_row = cur.fetchone()
+        if not pwd_row:
+            raise ValueError("该账号未设置密码，请先绑定密码")
+        if not _verify_password(old_password, pwd_row["password_hash"]):
+            raise ValueError("旧密码错误")
+        cur.execute(
+            f"UPDATE {PASSWORD_TABLE} SET password_hash=%s, update_time=now() WHERE user_id=%s",
+            (_hash_password(new_password), user_id),
+        )
+        conn.commit()
+        logger.info(f"[Auth] 修改密码成功 user_id={user_id}")

@@ -14,6 +14,7 @@ if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
 USER_TABLE = os.getenv("PG_HRSSC_USER_TABLE", "hrssc_user_mgmt")
 IDENTITY_TABLE = os.getenv("PG_HRSSC_IDENTITY_TABLE", "hrssc_identity_mgmt")
 VERIFY_CODE_TABLE = os.getenv("PG_HRSSC_VERIFY_CODE_TABLE", "hrssc_verify_code_mgmt")
+PASSWORD_TABLE = os.getenv("PG_HRSSC_PASSWORD_TABLE", "hrssc_password_mgmt")
 
 
 def _pg_conn():
@@ -53,12 +54,25 @@ TABLES = [
         create_time timestamp NOT NULL DEFAULT now()
     )
     """,
+    f"""
+    CREATE TABLE IF NOT EXISTS {PASSWORD_TABLE} (
+        id bigserial PRIMARY KEY,
+        user_id bigint NOT NULL REFERENCES {USER_TABLE}(id) ON DELETE CASCADE,
+        password_hash varchar(200) NOT NULL,
+        status varchar(20) NOT NULL DEFAULT 'Enabled',
+        deleted bool NOT NULL DEFAULT false,
+        create_time timestamp NOT NULL DEFAULT now(),
+        update_time timestamp NOT NULL DEFAULT now(),
+        UNIQUE(user_id)
+    )
+    """,
 ]
 
 INDEXES = [
     f"CREATE INDEX IF NOT EXISTS ix_{IDENTITY_TABLE}_user_id ON {IDENTITY_TABLE}(user_id)",
     f"CREATE INDEX IF NOT EXISTS ix_{IDENTITY_TABLE}_unionid ON {IDENTITY_TABLE}(unionid) WHERE deleted=false",
     f"CREATE INDEX IF NOT EXISTS ix_{VERIFY_CODE_TABLE}_phone_scene ON {VERIFY_CODE_TABLE}(phone, scene)",
+    f"CREATE INDEX IF NOT EXISTS ix_{PASSWORD_TABLE}_user_id ON {PASSWORD_TABLE}(user_id)",
 ]
 
 

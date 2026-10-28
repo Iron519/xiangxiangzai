@@ -6,7 +6,7 @@
 |------|------|
 | `auth.py` | JWT 签发/校验、鉴权依赖（`get_current_user` / `require_permission` 等） |
 | `auth_service.py` | 验证码发送/校验、用户 upsert、多身份绑定、角色权限聚合 |
-| `auth_api.py` | 统一登录接口（短信/微信小程序/公众号 H5，prefix: `/api/v1/auth`） |
+| `auth_api.py` | 统一登录接口（账号密码/短信/微信小程序/公众号 H5，prefix: `/api/v1/auth`） |
 | `wx_client.py` | 微信客户端：小程序 code2session / 手机号快捷组件、公众号网页授权 |
 | `users_api.py` | 用户 CRUD + 当前用户画像（prefix: `/api/v1/users`） |
 | `roles_api.py` | 角色 CRUD + 角色-权限分配（prefix: `/api/v1/roles`） |
@@ -25,15 +25,17 @@
 | `sys_user_role` | 用户-角色关联表 |
 | `sys_permission` | 权限表（code / name / action / type） |
 | `sys_role_permission` | 角色-权限关联表 |
-| `hrssc_identity_mgmt` | 身份绑定表（provider ∈ mobile / wechat_mini / wechat_mp，UNIQUE(provider, identifier)） |
+| `hrssc_identity_mgmt` | 身份绑定表（provider ∈ mobile / wechat_mini / wechat_mp / password，UNIQUE(provider, identifier)） |
 | `hrssc_verify_code_mgmt` | 短信验证码表（60s 发送冷却、5 分钟内有效、最多 5 次校验失败） |
+| `hrssc_password_mgmt` | 账号密码表（user_id + bcrypt password_hash，UNIQUE(user_id)） |
 
 ## 登录体系
 
-**统一账号模型**：第三方身份（微信 openid/unionid）与手机号都绑定到本地用户。
+**统一账号模型**：第三方身份（微信 openid/unionid）、手机号与用户名密码都绑定到本地用户。
 account_id 是 JWT.sub 主键：手机号登录 = 手机号；微信首登 = `wx_<openid>`；
-微信用户绑定手机号后自动转为手机号。unis 用小程序的 openid 与公众号 openid 靠
-同一开放平台 unionid 打通（`create_auth_tables.py` 的 `wx_union` 身份类型）。
+微信用户绑定手机号后自动转为手机号。账号密码登录 = 用户名。
+unis 用小程序的 openid 与公众号 openid 靠同一开放平台 unionid 打通
+（`create_auth_tables.py` 的 `wx_union` 身份类型）。password 身份类型用于账号密码登录。
 
 **首次登录自动建号**，默认绑定 `guest` 角色（可在 `.env` `AUTH_DEFAULT_ROLE` 调整）。
 
@@ -43,6 +45,9 @@ account_id 是 JWT.sub 主键：手机号登录 = 手机号；微信首登 = `wx
 
 | 方法 | 路径 | 鉴权 | 说明 |
 |------|------|------|------|
+| POST | `/api/v1/auth/register` | 无 | 账号密码注册：用户名（3-30 位字母/数字/下划线）+ 密码（至少 6 位），自动建号并签发 JWT |
+| POST | `/api/v1/auth/password/login` | 无 | 账号密码登录，校验通过签发 JWT |
+| POST | `/api/v1/auth/change-password` | Bearer | 修改密码（需旧密码校验） |
 | POST | `/api/v1/auth/sms/send` | 无 | 发送短信验证码。参数 `phone`、`scene`(login/bind)。`SMS_DRIVER=mock` 时响应返回 `debugCode` 便于联调 |
 | POST | `/api/v1/auth/sms/login` | 无 | 手机号 + 验证码登录，自动建号并签发 JWT |
 | POST | `/api/v1/auth/wechat/mini/login` | 无 | 小程序 `wx.login` code 换 openid 登录；未绑手机时返回 `needBindPhone=true` |
@@ -159,6 +164,13 @@ account_id 是 JWT.sub 主键：手机号登录 = 手机号；微信首登 = `wx
 | `PG_HRSSC_ROLE_PERMISSION_TABLE` | 角色-权限关联表名（默认 `sys_role_permission`） |
 | `PG_HRSSC_IDENTITY_TABLE` | 身份绑定表名（默认 `hrssc_identity_mgmt`） |
 | `PG_HRSSC_VERIFY_CODE_TABLE` | 验证码表名（默认 `hrssc_verify_code_mgmt`） |
+| `PG_HRSSC_PASSWORD_TABLE` | 账号密码表名（默认 `hrssc_password_mgmt`） |
+
+## 依赖
+
+```
+pip install bcrypt pyjwt psycopg python-dotenv fastapi httpx
+```
 
 ## 初始化
 
@@ -170,6 +182,24 @@ python create_auth_tables.py
 ```
 
 ## 登录流程
+
+### 账号密码
+
+```
+注册：
+1. 前端 POST /api/v1/auth/register {username, password}
+2. 后端校验用户名格式（3-30 位字母/数字/下划线）+ 密码强度（≥6 位）
+3. 创建用户 → 绑定 password 身份 → 写入 bcrypt 密码哈希 → 绑定默认角色 → 签发 JWT
+4. 前端存 JWT，后续请求带 Authorization: Bearer <token>
+
+登录：
+1. 前端 POST /api/v1/auth/password/login {username, password}
+2. 后端按 password 身份定位用户 → bcrypt 校验密码 → 签发 JWT
+
+修改密码：
+1. 前端 POST /api/v1/auth/change-password {oldPassword, newPassword}（需 Bearer token）
+2. 后端校验旧密码 → 更新 bcrypt 哈希
+```
 
 ### 手机验证码
 
