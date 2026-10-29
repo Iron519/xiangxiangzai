@@ -19,11 +19,11 @@ from sso_did.rbac_models import (
 load_dotenv(find_dotenv())
 logger = logging.getLogger("DIDRbac")
 
-USER_TABLE = os.getenv("PG_HRSSC_USER_TABLE", "sys_user")
-ROLE_TABLE = os.getenv("PG_HRSSC_ROLE_TABLE", "sys_role")
-USER_ROLE_TABLE = os.getenv("PG_HRSSC_USER_ROLE_TABLE", "sys_user_role")
-PERMISSION_TABLE = os.getenv("PG_HRSSC_PERMISSION_TABLE", "sys_permission")
-ROLE_PERMISSION_TABLE = os.getenv("PG_HRSSC_ROLE_PERMISSION_TABLE", "sys_role_permission")
+USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "sys_user")
+ROLE_TABLE = os.getenv("PG_MYAGENT_ROLE_TABLE", "sys_role")
+USER_ROLE_TABLE = os.getenv("PG_MYAGENT_USER_ROLE_TABLE", "sys_user_role")
+PERMISSION_TABLE = os.getenv("PG_MYAGENT_PERMISSION_TABLE", "sys_permission")
+ROLE_PERMISSION_TABLE = os.getenv("PG_MYAGENT_ROLE_PERMISSION_TABLE", "sys_role_permission")
 
 
 def _pg_conn():

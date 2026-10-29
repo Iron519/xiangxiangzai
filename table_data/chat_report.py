@@ -39,7 +39,7 @@ if not logger.handlers:
 logger.info(f"日志文件: {LOG_PATH}")
 
 # ================= PG 配置 =================
-CONV_TABLE = os.getenv("PG_HRSSC_CONVERSATIONS_TABLE", "")
+CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "")
 def _pg_conn():
     return psycopg.connect(
         host=os.getenv("PG_HOST"),

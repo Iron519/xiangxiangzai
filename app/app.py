@@ -32,11 +32,11 @@ from calculate_logic.rag.scene_template_mgmt import router as scene_template_rou
 
 # ================= 配置运行日志 =================
 LOG_DIR = Path(PROJECT_ROOT) / "logs"
-LOG_FILE = "hrssc_main.log"
+LOG_FILE = "myagent_main.log"
 LOG_PATH = os.path.join(LOG_DIR, LOG_FILE)
 if not os.path.exists(LOG_DIR):
     os.makedirs(LOG_DIR)
-logger = logging.getLogger("HrsscMain")
+logger = logging.getLogger("MyAgentMain")
 if not logger.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler = logging.StreamHandler()
@@ -49,7 +49,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= 创建 FastAPI 应用 =================
-app = FastAPI(title="HRSSC")
+app = FastAPI(title="MyAgent")
 
 # ================= CORS 配置 =================
 app.add_middleware(
@@ -131,7 +131,7 @@ async def _close_checkpointer_on_shutdown():
         logger.warning(f"[Shutdown] 关闭 checkpoint 连接池失败: {e}")
 
 
-# ================= HRSSC 应用API =================
+# ================= MyAgent 应用API =================
 # 修正 .js 等 MIME 类型（部分环境下默认映射为 application/json，会导致浏览器拒绝执行脚本）
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
@@ -157,7 +157,7 @@ async def did_auth_js():
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "HRSSC"}
+    return {"status": "healthy", "service": "MyAgent"}
 
 
 # ================= 素材访问接口（JWT 鉴权） =================

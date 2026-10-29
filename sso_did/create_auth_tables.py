@@ -10,8 +10,8 @@ PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-USER_TABLE = os.getenv("PG_HRSSC_USER_TABLE", "hrssc_user_mgmt")
-PASSWORD_TABLE = os.getenv("PG_HRSSC_PASSWORD_TABLE", "hrssc_password_mgmt")
+USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user_mgmt")
+PASSWORD_TABLE = os.getenv("PG_MYAGENT_PASSWORD_TABLE", "myagent_password_mgmt")
 
 
 def _pg_conn():

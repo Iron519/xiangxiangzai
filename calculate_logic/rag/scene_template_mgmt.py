@@ -38,7 +38,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= 表配置 =================
-SCENE_TABLE = os.getenv("PG_HRSSC_SCENE_TABLE", "hrssc_scene_templates")
+SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
 # 鉴权依赖：复用 FAQ 权限码（读/写/删同源，直接对齐 faq 板块）
 _SCENE_READ_DEP = require_permission("faq:read")

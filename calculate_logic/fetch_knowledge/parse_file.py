@@ -200,7 +200,7 @@ class DocumentParser:
     # Office→PDF 统一走 MinerU：嵌入图片等同 PDF 一样做锚点映射落库
     # ============================================================
     def _parse_office_via_mineru(self, file_path: str) -> str:
-        tmp_dir = tempfile.mkdtemp(prefix="hrssc_office_pdf_")
+        tmp_dir = tempfile.mkdtemp(prefix="myagent_office_pdf_")
         try:
             pdf_path = os.path.join(tmp_dir, Path(file_path).stem + ".pdf")
             if not self._convert_office_to_pdf(file_path, pdf_path):
@@ -1198,7 +1198,7 @@ class DocumentParser:
 # 本地测试
 # =====================================================================
 if __name__ == "__main__":
-    test_file = "/root/iron/Abort_HRSSC_Doc/data/test_data/Tutor Book_20251010_Summer Allowance Rule Sharing.xlsx"
+    test_file = "/root/iron/Abort_MyAgent_Doc/data/test_data/Tutor Book_20251010_Summer Allowance Rule Sharing.xlsx"
     parser = DocumentParser()
     text = parser.parse_file(test_file)
     # print(text)

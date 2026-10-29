@@ -365,7 +365,7 @@ def store_semantic_chunks(
     ]
 
     pg_schema = schema or "public"
-    pg_table = table or os.getenv("PG_HRSSC_KB_TABLE")
+    pg_table = table or os.getenv("PG_MYAGENT_KB_TABLE")
 
     conn = psycopg.connect(
         host=os.getenv("PG_HOST"),

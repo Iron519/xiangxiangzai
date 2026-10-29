@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
-# HRSSC_Management 服务管理脚本（多 Worker uvicorn）
+# MyAgent 服务管理脚本（多 Worker uvicorn）
 # 用法:
 #   ./run.sh {start|stop|restart|status} [workers]
 #   workers: worker 进程数，默认 4
 #
 # 服务: uvicorn 跑 app.app:app，监听 10.85.212.73:8091
-# 启动方式: venv uvicorn + setsid（脱离会话），stdout/stderr 写入 logs/hrssc_stdout.log
+# 启动方式: venv uvicorn + setsid（脱离会话），stdout/stderr 写入 logs/myagent_stdout.log
 # PID 文件: logs/.run.pid 记录主进程（supervisor）PID
 # 注意:
 #   - 多 worker 模式必须用 uvicorn 命令行启动（app:app 字符串形式）。
@@ -16,7 +16,7 @@
 set -u
 
 # ---- 配置 ----
-APP_DIR="/root/iron/HRSSC_Management"
+APP_DIR="/root/iron/MyAgent"
 APP_MODULE="app.app:app"
 HOST="10.85.212.73"
 PORT="8091"
@@ -24,7 +24,7 @@ VENV_DIR="${APP_DIR}/../iron_venv"
 [ -x "${VENV_DIR}/bin/uvicorn" ] || VENV_DIR="${APP_DIR}/iron_venv"            # 兜底：venv 在项目内
 UVICORN="${VENV_DIR}/bin/uvicorn"
 PYTHON_BIN="${VENV_DIR}/bin/python"
-LOG_FILE="${APP_DIR}/logs/hrssc_stdout.log"
+LOG_FILE="${APP_DIR}/logs/myagent_stdout.log"
 PID_FILE="${APP_DIR}/logs/.run.pid"
 DEFAULT_WORKERS=4
 

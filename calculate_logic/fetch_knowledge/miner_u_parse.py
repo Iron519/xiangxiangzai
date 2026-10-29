@@ -19,7 +19,7 @@ REQUIRED_ENV_VARS = ["ACCESSCODE", "BASE_URL", "VLM_MODEL", "MINERU_URL", "MINER
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # 解析结果统一输出目录
-PARSE_RESULT_DIR = Path(config.get("WORK_PATH", "/root/iron/HRSSC_Management")) / "calculate_logic" / "fetch_knowledge" / "parse_result"
+PARSE_RESULT_DIR = Path(config.get("WORK_PATH", "/root/iron/MyAgent")) / "calculate_logic" / "fetch_knowledge" / "parse_result"
 PARSE_RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ================= 运行日志配置 —— 直接复用DocumentParser =================
@@ -1346,7 +1346,7 @@ class MinerUProcessor:
 
 def main():
     ensure_logger_handler()  # 独立运行本文件时补充控制台日志兜底；被 parse_file 导入时该 logger 已有 handler，不会重复添加
-    PDF_PATH = "/root/iron/Abort_HRSSC_Doc/data/test_data/hrssc_file/汇算清缴操作指南.pdf"
+    PDF_PATH = "/root/iron/Abort_MyAgent_Doc/data/test_data/myagent_file/汇算清缴操作指南.pdf"
 
     processor = MinerUProcessor(
         pdf_path=PDF_PATH,

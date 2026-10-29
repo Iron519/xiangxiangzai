@@ -1,7 +1,7 @@
 """
 伪数据生成脚本
 
-向 hrssc_conversations_history 表中灌入 10 万条模拟对话数据，
+向 myagent_conversations_history 表中灌入 10 万条模拟对话数据，
 用于测试数据报表页面的展示效果。
 
 使用方式：
@@ -29,7 +29,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # ==================== PG 连接 ====================
-CONV_TABLE = os.getenv("PG_HRSSC_CONVERSATIONS_TABLE", "")
+CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "")
 
 
 def _pg_conn():

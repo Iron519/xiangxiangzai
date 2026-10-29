@@ -54,7 +54,7 @@
 
 | 文件 | 作用 |
 |------|------|
-| `create_auth_tables.py` | 创建密码表（`hrssc_password_mgmt`）。首次部署时运行一次。 |
+| `create_auth_tables.py` | 创建密码表（`myagent_password_mgmt`）。首次部署时运行一次。 |
 | `create_rbac_tables.py` | 创建 5 张 RBAC 表（用户/角色/用户-角色/权限/角色-权限），并插入初始数据：3 个角色（admin/operator/guest）和 18 条权限码。首次部署时运行一次。 |
 
 ## 登录流程（一次请求的完整链路）

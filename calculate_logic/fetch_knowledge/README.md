@@ -62,7 +62,7 @@ faq_mgmt.py  FaqManagement —— FAQ 增删改查路由（独立，不依赖上
 
 ## 三、库表用途（faq_mgmt.py）
 
-- **FAQ 表**（表名 `.env` `PG_HRSSC_FAQ_TABLE`，默认 `hrssc_faq_mgmt`）：存 FAQ 问答对（`id/question/answer/created_at/updated_at`）。删除时 `_renumber_ids` 用临时映射表重排 id 连续并重置自增序列。表结构定义于 `table_data/create_pg_tables.py`。
+- **FAQ 表**（表名 `.env` `PG_MYAGENT_FAQ_TABLE`，默认 `myagent_faq_mgmt`）：存 FAQ 问答对（`id/question/answer/created_at/updated_at`）。删除时 `_renumber_ids` 用临时映射表重排 id 连续并重置自增序列。表结构定义于 `table_data/create_pg_tables.py`。
 
 `parse_file`/`miner_u_parse` **不写任何库表**，只产出文件系统产物（见「注意事项」），切片入库由 `chunk_pipeline/` 承接。
 

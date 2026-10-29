@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HRSSC</title>
+  <title>MyAgent</title>
   <link rel="icon" type="image/png" href="/front_end_assets/Avatar.png">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -33,8 +33,8 @@
       font-style: normal;
     }
     /* ═══════════════════════════════════════════════════════
-       HRSSC — Enterprise Dashboard Design System v2
-       对齐 hrssc-frontend 的布局与交互模式
+       MyAgent — Enterprise Dashboard Design System v2
+       对齐 myagent-frontend 的布局与交互模式
        ═══════════════════════════════════════════════════════ */
 
     :root {
@@ -846,7 +846,7 @@
     <header class="app-header" id="appHeader">
       <div class="app-logo-box">
         <div class="app-logo-icon"></div>
-        <span class="app-logo-title">HRSSC</span>
+        <span class="app-logo-title">MyAgent</span>
       </div>
       <div class="app-top-nav">
         <button class="top-nav-item" data-page="home">Home</button>
@@ -875,7 +875,7 @@
         <div class="page-panel" id="panel-home">
           <div class="home-bg">
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:calc(100vh - 64px);position:relative;z-index:1">
-              <div style="font-size:48px;font-weight:var(--fw-b);color:var(--c-text);letter-spacing:-0.03em">HRSSC AI CHAT</div>
+              <div style="font-size:48px;font-weight:var(--fw-b);color:var(--c-text);letter-spacing:-0.03em">MyAgent AI Chat</div>
               <div style="font-size:20px;color:var(--c-text-2);margin-top:14px">Knowledge-powered HR Q&A Assistant</div>
               <div style="display:flex;gap:20px;margin-top:60px">
                 <div class="step-section" style="cursor:pointer;min-width:200px;text-align:center" onclick="switchPage('chat')">
@@ -1233,7 +1233,7 @@
         <div class="page-panel" id="panel-chat">
           <div class="chat-shell">
             <div class="chat-header">
-              <div class="chat-header__title">HRSSC Assistant</div>
+              <div class="chat-header__title">MyAgent Assistant</div>
               <button class="chat-new-btn" id="newChatBtn" title="Start a new conversation">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 New Chat
@@ -1245,7 +1245,7 @@
                   <path d="M52 28c0 8-6 14-14 14H22l-10 10V22c0-8 6-14 14-14h26z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                   <path d="M24 28h16M24 36h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                 </svg>
-                <div class="chat-empty__title">HRSSC Assistant</div>
+                <div class="chat-empty__title">MyAgent Assistant</div>
                 <div class="chat-empty__desc">Knowledge base is ready. Ask me any HR-related question.</div>
               </div>
             </div>
@@ -1256,7 +1256,7 @@
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M14 8H2M14 8L8 2M14 8L8 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                 </button>
               </div>
-              <p class="chat-input-hint">HRSSC Assistant · Please verify important information</p>
+              <p class="chat-input-hint">MyAgent Assistant · Please verify important information</p>
             </div>
           </div>
         </div>
@@ -1395,14 +1395,12 @@
   </div>
 </div>
 
-<!-- 登录弹窗（账号密码 / 手机验证码 / 微信） -->
+<!-- 登录弹窗（账号密码 / 注册） -->
 <div class="modal-overlay" id="authModal" style="display:none;z-index:2000">
   <div class="modal-dialog" style="max-width:400px">
     <div class="modal-header">
       <div style="display:flex;gap:16px">
         <span class="auth-tab" id="authTabPassword" onclick="switchAuthTab('password')" style="cursor:pointer;padding-bottom:4px;border-bottom:2px solid var(--c-brand);font-weight:600">账号密码</span>
-        <span class="auth-tab" id="authTabPhone" onclick="switchAuthTab('phone')" style="cursor:pointer;padding-bottom:4px;color:var(--c-text-3)">手机验证码</span>
-        <span class="auth-tab" id="authTabWechat" onclick="switchAuthTab('wechat')" style="cursor:pointer;padding-bottom:4px;color:var(--c-text-3)">微信登录</span>
       </div>
     </div>
     <div class="modal-body">
@@ -1424,30 +1422,9 @@
         </div>
         <p class="modal-hint" id="authPwdHint" style="margin:2px 0 0;font-size:var(--fs-xs);color:var(--c-text-2)"></p>
       </div>
-      <!-- 手机验证码面板 -->
-      <div id="authPanelPhone" style="display:none">
-        <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">手机号</label>
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input type="tel" class="modal-input" id="authPhone" placeholder="请输入手机号" style="flex:1" />
-        </div>
-        <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">验证码</label>
-        <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input type="text" class="modal-input" id="authCode" placeholder="6 位验证码" style="flex:1" />
-          <button class="btn-secondary" id="authSendCode" onclick="sendSmsCode()" style="white-space:nowrap">发送验证码</button>
-        </div>
-        <p class="modal-hint" id="authHint" style="margin:2px 0 0;font-size:var(--fs-xs);color:var(--c-text-2)"></p>
-      </div>
-      <!-- 微信面板 -->
-      <div id="authPanelWechat" style="display:none">
-        <p class="modal-hint" style="font-size:var(--fs-sm);color:var(--c-text-2);margin:0 0 14px">
-          使用微信扫码/授权登录（H5 网页授权）；小程序端请在小程序内直接拉起登录。
-        </p>
-      </div>
     </div>
     <div class="modal-footer">
       <button class="btn-secondary" id="authCancel" onclick="closeLogin()">取消</button>
-      <button class="btn-primary" id="authWechatMp" onclick="wechatMpLogin()" style="display:none">微信授权登录</button>
-      <button class="btn-primary" id="authSmsLogin" onclick="smsLogin()" style="display:none">登录</button>
       <button class="btn-primary" id="authPwdLogin" onclick="passwordLogin()">登录</button>
       <button class="btn-secondary" id="authSwitchToRegister" onclick="switchToRegister()" style="display:none">注册</button>
       <button class="btn-primary" id="authDoRegister" onclick="passwordRegister()" style="display:none">注册</button>
@@ -1487,7 +1464,7 @@
   // 注意：STORE_PREFIX / Store 是 did-auth.js 的前置依赖，必须先于 did-auth.js 定义。
   // did-auth.js 在加载时（顶层 const AUTH）立即用到 STORE_PREFIX，若它先加载会抛
   // "STORE_PREFIX is not defined" 导致整个鉴权脚本中断、openLogin 等函数无法注册。
-  const STORE_PREFIX = 'hrssc:';
+  const STORE_PREFIX = 'myagent:';
   const Store = {
     get(key, fallback) {
       try { const v = localStorage.getItem(STORE_PREFIX + key); return v === null ? fallback : JSON.parse(v); }
@@ -1505,12 +1482,12 @@
 
 <script src="did-auth.js"></script>
 <script>
-  // 身份鉴权（手机验证码/微信 + JWT + RBAC 前端）已抽离至 did-auth.js。
+  // 身份鉴权（账号密码 + Redis Session + RBAC 前端）已抽离至 did-auth.js。
   // 加载顺序：先定义 STORE_PREFIX/Store（本文件上方第一个 script）→ did-auth.js → 本主 script。
-  // 它声明的 getAccessToken / apiFetch / currentUser / hasRole / canAccess / webLogin /
-  // webLogout / smsLogin / sendSmsCode / switchAuthTab / wechatMpLogin / openLogin / closeLogin /
+  // 它声明的 getAccessToken / apiFetch / currentUser / hasRole / canAccess /
+  // webLogout / switchAuthTab / openLogin / closeLogin /
   // fetchCurrentUser / renderUserBox / applyRolePermissions / handleUnauthorized
-  // 均为全局函数，本 <script> 直接引用；它内部 smsLogin()/webLogin() 在运行时调用本 <script> 的 bootstrapApp()。
+  // 均为全局函数，本 <script> 直接引用；它内部在运行时调用本 <script> 的 bootstrapApp()。
 
   // ==================== 全局状态 ====================
   let currentPage = 'home';
@@ -2487,7 +2464,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   }
 
   // ── AI 气泡操作：点赞/点踩/复制/重新生成 ──
-  // 点赞/点踩：写入 PG_HRSSC_CONVERSATIONS_TABLE.user_judgement（后端会话需处于登录态）
+  // 点赞/点踩：写入 PG_MYAGENT_CONVERSATIONS_TABLE.user_judgement（后端会话需处于登录态）
   function btnFlash(btn, hint) {
     const orig = btn.getAttribute('data-tip');
     btn.classList.remove('clicked'); void btn.offsetWidth; btn.classList.add('clicked');
@@ -3095,16 +3072,8 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     });
   }
 
-  // 鉴权回调检测 + 登录态引导
+  // 登录态引导
   async function bootstrap() {
-    const params = new URLSearchParams(location.search);
-    const code = params.get('code');
-    const state = params.get('state');
-    if (code && state) {
-      // 微信网页授权回调：用 code+state 换 JWT
-      await webLogin(code, state);
-      return;
-    }
     if (getAccessToken()) {
       // 已有 token：校验有效性（拉 current-user），失败则弹登录
       try {
@@ -3114,7 +3083,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
         handleUnauthorized();
       }
     } else {
-      // 未登录：弹登录框（手机验证码 / 微信）
+      // 未登录：弹登录框
       openLogin();
     }
   }
@@ -3206,7 +3175,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     sendMessage();
   }
 
-  // 引用原图预览：素材接口需 JWT，<img src> 带不了 Authorization 头，
+  // 引用原图预览：素材接口需登录 token，<img src> 带不了 Authorization 头，
   // 故用 apiFetch 取 blob 转 objectURL 展示；下载同样走 objectURL。
   async function openSourcePreview(btn) {
     let urls = [];

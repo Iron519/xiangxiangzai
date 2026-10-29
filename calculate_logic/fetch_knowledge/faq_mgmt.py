@@ -37,7 +37,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= 表配置 =================
-FAQ_TABLE = os.getenv("PG_HRSSC_FAQ_TABLE", "hrssc_faq_mgmt")
+FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
 
 # 鉴权依赖：按权限码守卫
 _FAQ_READ_DEP = require_permission("faq:read")
@@ -77,7 +77,7 @@ def _invalidate_faq_cache():
 
 
 def _renumber_ids(cur):
-    """重排 hrssc_faq 的 id，使其从1开始连续（按当前 id 升序重新编号）。
+    """重排 myagent_faq 的 id，使其从1开始连续（按当前 id 升序重新编号）。
 
     用临时映射表（旧id→新id）批量更新，避免直接 UPDATE 时主键冲突；
     随后重置序列到 MAX(id)+1，保证下次 INSERT 接续递增。

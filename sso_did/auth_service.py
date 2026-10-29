@@ -19,7 +19,7 @@ load_dotenv(find_dotenv())
 
 logger = logging.getLogger("AuthService")
 
-PASSWORD_TABLE = os.getenv("PG_HRSSC_PASSWORD_TABLE", "hrssc_password_mgmt")
+PASSWORD_TABLE = os.getenv("PG_MYAGENT_PASSWORD_TABLE", "myagent_password_mgmt")
 DEFAULT_ROLE = os.getenv("AUTH_DEFAULT_ROLE", "guest")
 
 _user_svc = UserService()

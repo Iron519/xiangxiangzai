@@ -12,11 +12,11 @@ PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-USER_TABLE = os.getenv("PG_HRSSC_USER_TABLE", "hrssc_user_mgmt")
-ROLE_TABLE = os.getenv("PG_HRSSC_ROLE_TABLE", "hrssc_role_mgmt")
-USER_ROLE_TABLE = os.getenv("PG_HRSSC_USER_ROLE_TABLE", "hrssc_user_role_mgmt")
-PERMISSION_TABLE = os.getenv("PG_HRSSC_PERMISSION_TABLE", "hrssc_permission_mgmt")
-ROLE_PERMISSION_TABLE = os.getenv("PG_HRSSC_ROLE_PERMISSION_TABLE", "hrssc_role_permission_mgmt")
+USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user_mgmt")
+ROLE_TABLE = os.getenv("PG_MYAGENT_ROLE_TABLE", "myagent_role_mgmt")
+USER_ROLE_TABLE = os.getenv("PG_MYAGENT_USER_ROLE_TABLE", "myagent_user_role_mgmt")
+PERMISSION_TABLE = os.getenv("PG_MYAGENT_PERMISSION_TABLE", "myagent_permission_mgmt")
+ROLE_PERMISSION_TABLE = os.getenv("PG_MYAGENT_ROLE_PERMISSION_TABLE", "myagent_role_permission_mgmt")
 
 
 def _pg_conn():

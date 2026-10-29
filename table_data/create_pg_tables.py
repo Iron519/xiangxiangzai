@@ -23,11 +23,11 @@ def _pg_conn():
 
 
 # ==================== 表配置 ====================
-KB_TABLE = os.getenv("PG_HRSSC_KB_TABLE", "hrssc_kb_chunks_mgmt")
-CONV_TABLE = os.getenv("PG_HRSSC_CONVERSATIONS_TABLE", "hrssc_conversations_history_mgmt")
-TASK_TABLE = os.getenv("PG_HRSSC_UPLOAD_TASKS_TABLE", "hrssc_upload_tasks_mgmt")
-FAQ_TABLE = os.getenv("PG_HRSSC_FAQ_TABLE", "hrssc_faq_mgmt")
-SCENE_TABLE = os.getenv("PG_HRSSC_SCENE_TABLE", "hrssc_scene_templates")
+KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks_mgmt")
+CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history_mgmt")
+TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks_mgmt")
+FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
+SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))
 
 # ==================== 表定义 ====================

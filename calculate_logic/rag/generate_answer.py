@@ -29,7 +29,7 @@ from dotenv import load_dotenv, find_dotenv
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
 
-REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_HRSSC_CONVERSATIONS_TABLE", "PG_HRSSC_KB_TABLE", "PG_HRSSC_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
+REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # ================= 运行路径配置 ===============
@@ -155,11 +155,11 @@ def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  #
         with _pg_conn() as conn:
             # 依次存入user和assistant的对话内容
             conn.execute(
-                f"INSERT INTO {config["PG_HRSSC_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'user', %s, %s, %s, NULL, NULL, NULL)",
+                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'user', %s, %s, %s, NULL, NULL, NULL)",
                 (uid, session_id, turn_count, user_msg, mode, None),
             )
             conn.execute(
-                f"INSERT INTO {config["PG_HRSSC_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, sources, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s)",
+                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, sources, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s)",
                 (uid, session_id, turn_count, ai_msg, mode, json.dumps(sources if sources else []), duration_ms, prompt_token, completion_token, total_token),
             )
             conn.commit()
@@ -378,7 +378,7 @@ async def _judge_sensitive(query: str) -> str:
         return "miss"
 
 # ================= 检测场景命中，调用场景模板（查表注入，实时生效） =================
-SCENE_TABLE = os.getenv("PG_HRSSC_SCENE_TABLE", "hrssc_scene_templates")
+SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
 def _load_scenes() -> list[dict]:
     # 从 PG 加载全部启用的场景模板,表极小（个位数行），同步查库耗时毫秒级。
@@ -459,7 +459,7 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
 _faq_cache: dict = {"questions": [], "answers": [], "bm25": None}  # FAQ 缓存：进程内缓存一份 (questions, answers, bm25)，避免每问都查库+重建索引
 
 # FAQ 快速匹配（BM25 + jieba 分词）
-FAQ_TABLE = config['PG_HRSSC_FAQ_TABLE']
+FAQ_TABLE = config['PG_MYAGENT_FAQ_TABLE']
 FAQ_COVERAGE_THRESHOLD = float(config['FAQ_COVERAGE_THRESHOLD'])  # 查询分词位于Top 1文档分词的IDF加权概率
 FAQ_RATIO_THRESHOLD = float(config['FAQ_RATIO_THRESHOLD'])  # Top1 Score/(Top1 Score + Top2 Score)
 
@@ -473,7 +473,7 @@ def _load_faq() -> tuple[list[str], list[str], BM25Plus]:  # 从 PG 加载全部
         with _pg_conn() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT question, answer FROM {FAQ_TABLE} ORDER BY id")
             rows = cur.fetchall()
-            cur.execute(f"SELECT parent_content FROM {os.getenv('PG_HRSSC_KB_TABLE', '')} WHERE parent_content IS NOT NULL")
+            cur.execute(f"SELECT parent_content FROM {os.getenv('PG_MYAGENT_KB_TABLE', '')} WHERE parent_content IS NOT NULL")
             kb_rows = cur.fetchall()
     except Exception as e:
         logger.warning(f"[FaqMatch] 加载FAQ/KB失败: {e}")
@@ -1256,7 +1256,7 @@ async def conversation_judgement(session_id: str = Body(...),
     try:
         with _pg_conn() as conn:
             cur = conn.execute(
-                f"UPDATE {config["PG_HRSSC_CONVERSATIONS_TABLE"]} "
+                f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
                 "SET user_judgement = NULLIF(%s, '') "
                 "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
                 (judgement, session_id, turn_count),

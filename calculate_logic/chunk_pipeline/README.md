@@ -97,7 +97,7 @@ summary = store_semantic_chunks(semantic_chunks, ...)                # embedding
 
 ## 五、库表
 
-链路涉及 PG 知识库切片表（表名见 `.env` `PG_HRSSC_KB_TABLE`，默认 `hrssc_kb_chunks_mgmt`）。`embedding.py` 入库时动态读取表元信息（列类型 `_load_column_types`、去重键 `_load_upsert_key`），按 `UNIQUE(file_name, text_hash)` 做内容级去重覆盖。表结构定义于 `table_data/create_pg_tables.py`（`embedding vector(4096)`、`content_tsv` 等）。
+链路涉及 PG 知识库切片表（表名见 `.env` `PG_MYAGENT_KB_TABLE`，默认 `myagent_kb_chunks_mgmt`）。`embedding.py` 入库时动态读取表元信息（列类型 `_load_column_types`、去重键 `_load_upsert_key`），按 `UNIQUE(file_name, text_hash)` 做内容级去重覆盖。表结构定义于 `table_data/create_pg_tables.py`（`embedding vector(4096)`、`content_tsv` 等）。
 
 表为**删除重建**：`CREATE TABLE IF NOT EXISTS` 不会改旧表列类型，旧表若为 `vector(1024)` 需重建为 `vector(4096)` 后再入库。
 

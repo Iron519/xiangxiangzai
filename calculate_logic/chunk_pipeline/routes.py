@@ -70,11 +70,11 @@ class ChunkPipeline:
         resolve_child_image_urls(semantic_chunks, str(path))
 
         logger.info(f"语义分块完成，数量: {len(semantic_chunks)}")
-        logger.info(f"开始写入 PG: {os.getenv('PG_HRSSC_KB_TABLE')}")
+        logger.info(f"开始写入 PG: {os.getenv('PG_MYAGENT_KB_TABLE')}")
         summary = store_semantic_chunks(
             semantic_chunks,
             schema="public",
-            table=os.getenv("PG_HRSSC_KB_TABLE"),
+            table=os.getenv("PG_MYAGENT_KB_TABLE"),
             upsert_key=("file_name", "text_hash"),  # 内容级去重：同一文件相同 text_hash 的行直接覆盖
         )
         summary["file_path"] = str(path)
@@ -110,7 +110,7 @@ _UPLOAD_ACTIVE_STATUSES = (
 # "占用队列"的状态集合：进行中 + 排队中。新上传若发现已有这些状态的任务，则入队排队而非立即启动
 _UPLOAD_BUSY_STATUSES = _UPLOAD_ACTIVE_STATUSES + (UPLOAD_STATUS_QUEUED,)
 
-UPLOAD_TASKS_TABLE = os.getenv("PG_HRSSC_UPLOAD_TASKS_TABLE", "hrssc_upload_tasks")
+UPLOAD_TASKS_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
 # 可写入任务表的字段白名单
 _TASK_COLUMNS = {
     "task_id", "uid", "original_name", "save_name", "save_path", "file_size",
@@ -461,12 +461,12 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
         # 阶段间检查点：向量化完成后、入库前（入库前最后机会，避免半截脏数据）
         _check_cancelled(task_id)
         await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
-        logger.info(f"[Task {task_id}] 开始写入 PG表: {os.getenv('PG_HRSSC_KB_TABLE')}")
+        logger.info(f"[Task {task_id}] 开始写入 PG表: {os.getenv('PG_MYAGENT_KB_TABLE')}")
         summary = await asyncio.to_thread(
             store_semantic_chunks,
             semantic_chunks,
             schema="public",
-            table=os.getenv("PG_HRSSC_KB_TABLE"),
+            table=os.getenv("PG_MYAGENT_KB_TABLE"),
             upsert_key=("file_name", "text_hash"),  # 内容级去重
         )
 
@@ -550,7 +550,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             store_semantic_chunks,
             semantic_chunks,
             schema="public",
-            table=os.getenv("PG_HRSSC_KB_TABLE"),
+            table=os.getenv("PG_MYAGENT_KB_TABLE"),
             upsert_key=("file_name", "text_hash"),
         )
         await asyncio.to_thread(
@@ -689,7 +689,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
 
 # ================= 知识库文件列表 API =================
 
-KB_TABLE = os.getenv("PG_HRSSC_KB_TABLE", "")
+KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "")
 
 
 @router.get("/kb/files")
