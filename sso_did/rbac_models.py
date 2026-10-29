@@ -85,7 +85,7 @@ class RoleResponse(BaseModel):
     name: str
     description: str | None = None
     status: str = "Enabled"
-    permissionIds: list[int] = []   # 角色已分配的权限 id，角色详情回显用
+    permissionIds: list[int] = []
 
     class Config:
         from_attributes = True
@@ -100,8 +100,8 @@ class RoleQuery(PageQuery):
 class PermissionCreate(BaseModel):
     code: str
     name: str
-    action: str = "read"        # read / create / update / delete
-    type: str = "menu"          # menu / api / data
+    action: str = "read"
+    type: str = "menu"
     description: str | None = None
     status: str = "Enabled"
 
@@ -127,26 +127,20 @@ class PermissionQuery(PageQuery):
 
 
 class RolePermissionAssign(BaseModel):
-    """角色分配权限（整批覆盖，对齐 _assign_roles 的全量替换风格）。"""
     permissionIds: list[int] = []
 
 
 # ================= Auth =================
 class FullUserResponse(BaseModel):
-    """当前登录用户的完整画像（JWT 层 + sys_user 库表合并）。
-
-    供 /users/current-user 与生成链路等业务调用：路由层经 UserService.get_full_user()
-    取得，节点层经 ChatState['user'] 取（路由入口已塞入）。
-    roles/permissions 来自 JWT（签发时已查库），其余字段来自 sys_user 行。
-    """
-    uid: str                                  # account_id（JWT.sub）
-    username: str | None = None               # display_name（JWT.username）
-    roles: list[str] = []                     # 角色 codes（JWT.roles）
-    permissions: list[str] = []               # 权限码（JWT.permissions）
-    email: str | None = None                  # sys_user.email
-    mobile: str | None = None                 # sys_user.mobile
-    deptCode: str | None = None               # sys_user.dept_code
-    department: str | None = None             # sys_user.department
-    employeeType: str | None = None            # sys_user.employee_type
-    status: str = "Enabled"                   # sys_user.status
-    userId: int | None = None                 # sys_user.id（库内主键，可能未建档）
+    """当前登录用户的完整画像（token 层 + sys_user 库表合并）。"""
+    uid: str
+    username: str | None = None
+    roles: list[str] = []
+    permissions: list[str] = []
+    email: str | None = None
+    mobile: str | None = None
+    deptCode: str | None = None
+    department: str | None = None
+    employeeType: str | None = None
+    status: str = "Enabled"
+    userId: int | None = None

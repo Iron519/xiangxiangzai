@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   my_agent_db:
     image: pgvector/pgvector:pg18
@@ -12,9 +10,22 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pg_data:/var/lib/postgresql
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U yutiexin -d my_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  my_agent_redis:
+    image: redis:7-alpine
+    container_name: Redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,3 +40,4 @@ services:
 
 volumes:
   pg_data:
+  redis_data:

@@ -1,33 +1,51 @@
+import json
 import logging
 import os
+import secrets
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-import jwt
+import redis
 from dotenv import load_dotenv, find_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 load_dotenv(find_dotenv())
 
-# ================= 路径配置及import内部功能 ===============
 PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 logger = logging.getLogger("Auth")
 
-# ================= 配置 =================
-JWT_ALGORITHM = "HS256"
-JWT_ACCESS_SECRET = os.getenv("JWT_ACCESS_SECRET", "")
-JWT_ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", ""))  # 控制需要重新登录的间隔时长
+# ================= Redis 配置 =================
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_HOURS", "12")) * 3600
+SESSION_KEY_PREFIX = "session:"
+
+_redis_pool: redis.ConnectionPool | None = None
 
 
-# ================= JWT =================
+def _get_redis() -> redis.Redis:
+    """获取 Redis 连接（惰性创建连接池）。"""
+    global _redis_pool
+    if _redis_pool is None:
+        _redis_pool = redis.ConnectionPool(
+            host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB,
+            password=REDIS_PASSWORD or None,
+            decode_responses=True,
+        )
+    return redis.Redis(connection_pool=_redis_pool)
+
+
+# ================= TokenData =================
 @dataclass
 class TokenData:
-    """解码后的 JWT token 数据。"""
+    """从 Redis 还原的会话数据，接口与旧 JWT 版本完全兼容。"""
     uid: str
     username: str | None = None
     roles: list[str] = field(default_factory=list)
@@ -46,55 +64,66 @@ class TokenData:
         return any(c in self.permissions for c in codes)
 
 
+# ================= Token 签发 / 校验 / 销毁 =================
+def _serialize(user: TokenData) -> str:
+    return json.dumps({
+        "uid": user.uid,
+        "username": user.username,
+        "roles": user.roles,
+        "permissions": user.permissions,
+    }, ensure_ascii=False)
+
+
+def _deserialize(raw: str) -> TokenData:
+    d = json.loads(raw)
+    return TokenData(
+        uid=d["uid"],
+        username=d.get("username"),
+        roles=d.get("roles", []),
+        permissions=d.get("permissions", []),
+    )
+
+
 def create_access_token(
     uid: str,
     username: str | None = None,
     roles: list[str] | None = None,
     permissions: list[str] | None = None,
 ) -> str:
-    """签发 JWT access-token，将获取的user_info信息存入token中，供后续鉴权使用。
-
-    payload 含 roles 与 permissions 两套：roles 标识身份等级（admin/operator/guest），
-    permissions 为细粒度权限码（system:user:save 等），由角色-权限关联表查出。
-    鉴权优先用 permissions（权限驱动），roles 保留用于前端粗粒度判断。
-    """
-    now = datetime.now(timezone.utc)
-    expire = now + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {
-        "sub": uid,
-        "username": username or uid,
-        "roles": roles or [],
-        "permissions": permissions or [],
-        "exp": expire,
-        "iat": now,
-    }
-    return jwt.encode(payload, JWT_ACCESS_SECRET, algorithm=JWT_ALGORITHM)
+    """生成随机 token 并存入 Redis，返回 token 字符串。"""
+    token = secrets.token_urlsafe(32)
+    data = TokenData(uid=uid, username=username or uid,
+                     roles=roles or [], permissions=permissions or [])
+    r = _get_redis()
+    r.setex(f"{SESSION_KEY_PREFIX}{token}", SESSION_TTL_SECONDS, _serialize(data))
+    logger.info(f"[Auth] Token issued uid={uid}, roles={data.roles}")
+    return token
 
 
 def decode_access_token(token: str) -> TokenData:
-    """校验并解码 JWT，失败抛 401。"""
-    try:
-        payload = jwt.decode(token, JWT_ACCESS_SECRET, algorithms=[JWT_ALGORITHM])
-        return TokenData(
-            uid=payload["sub"],
-            username=payload.get("username"),
-            roles=payload.get("roles", []),
-            permissions=payload.get("permissions", []),
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+    """从 Redis 取会话，不存在或已过期抛 401。"""
+    r = _get_redis()
+    raw = r.get(f"{SESSION_KEY_PREFIX}{token}")
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired or invalid")
+    return _deserialize(raw)
 
 
-# ================= 鉴权依赖 =================
+def revoke_access_token(token: str) -> bool:
+    """登出：从 Redis 删除 token，返回是否删除成功。"""
+    r = _get_redis()
+    deleted = r.delete(f"{SESSION_KEY_PREFIX}{token}")
+    return deleted > 0
+
+
+# ================= 鉴权依赖（接口与旧版完全兼容） =================
 security_scheme = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
 ) -> TokenData:
-    """从 JWT 取当前用户，未登录抛 401。"""
+    """从 Bearer token 取当前用户，未登录抛 401。"""
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     return decode_access_token(credentials.credentials)
@@ -137,7 +166,7 @@ def require_any_role(role_codes: list[str]):
 
 
 def require_permission(code: str):
-    """依赖：要求具备指定权限码，否则 403（权限驱动鉴权，推荐使用）。"""
+    """依赖：要求具备指定权限码，否则 403。"""
     async def checker(
         credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     ) -> TokenData:
@@ -149,7 +178,7 @@ def require_permission(code: str):
 
 
 def require_any_permission(codes: list[str]):
-    """依赖：要求具备任一权限码，否则 403（权限驱动鉴权，推荐使用）。"""
+    """依赖：要求具备任一权限码，否则 403。"""
     async def checker(
         credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     ) -> TokenData:
