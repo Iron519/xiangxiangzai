@@ -1,8 +1,11 @@
 import os
 import re
 import json
+import time
 import logging
 import shutil
+import zipfile
+import io
 import fitz
 import base64
 import mimetypes
@@ -15,7 +18,7 @@ requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 load_dotenv(find_dotenv())
 
 # ================= 环境变量配置 =================
-REQUIRED_ENV_VARS = ["ACCESSCODE", "BASE_URL", "VLM_MODEL", "MINERU_URL", "MINERU_API_KEY", "WORK_PATH"]
+REQUIRED_ENV_VARS = ["ACCESSCODE", "BASE_URL", "VLM_MODEL", "MINERU_TOKEN", "MINERU_API_BASE", "WORK_PATH"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # 解析结果统一输出目录
@@ -48,8 +51,8 @@ class MinerUProcessor:
         min_image_area_ratio: float = 0.03,  # 插图 bbox 面积 / 页面面积 >= 该值才达标（过滤 logo/小装饰）
         min_image_side_px: int = 30,  # 插图宽、高最小值（像素），任一小于则该插图不达标
         access_code: str = config["ACCESSCODE"],
-        mineru_url: str = config["MINERU_URL"],
-        mineru_api_key: str = config["MINERU_API_KEY"],
+        mineru_token: str = config["MINERU_TOKEN"],
+        mineru_api_base: str = config["MINERU_API_BASE"],
         base_url: str = config["BASE_URL"],
         vlm_model: str = config["VLM_MODEL"],
     ):
@@ -77,8 +80,8 @@ class MinerUProcessor:
         self._basename_to_local = {}
 
         self.access_code = access_code
-        self.mineru_url = mineru_url
-        self.mineru_api_key = mineru_api_key
+        self.mineru_token = mineru_token
+        self.mineru_api_base = mineru_api_base.rstrip("/")
         self.base_url = base_url
         self.vlm_model = vlm_model
 
@@ -114,26 +117,113 @@ class MinerUProcessor:
         doc.close()
         return page_files
 
-    # =================== 2. 调用 MinerU解析单页PDF ======================
+    # =================== 2. 调用 MinerU 官方云 API v4 解析单页PDF ======================
     def call_mineru(self, pdf_path: str):
-        headers = {"apikey": self.mineru_api_key,}
-        data = {
-            "return_images": True,
-            "return_middle_json": True,
-            "return_content_list": True,
+        """调用 MinerU 官方云 API v4 解析单页 PDF，返回与旧内网接口兼容的结构：
+        {"results": {<file_name>: {"md_content":..., "content_list":..., "middle_json":..., "images":{}}}}
+
+        流程：提交 batch → PUT 上传文件 → 轮询结果 → 下载 zip → 解压组装
+        """
+        api_base = self.mineru_api_base
+        headers = {"Authorization": f"Bearer {self.mineru_token}", "Content-Type": "application/json"}
+        file_name = Path(pdf_path).name
+        data_id = Path(pdf_path).stem
+
+        # ---- 步骤1：提交 batch，获取上传 URL ----
+        submit_body = {
+            "enable_formula": True,
+            "language": "ch",
+            "layout_model": "doclayout_yolo",
+            "enable_table": True,
+            "model_version": "pipeline",
+            "files": [{"name": file_name, "is_ocr": True, "data_id": data_id}],
         }
+        resp = requests.post(f"{api_base}/api/v4/file-urls/batch", headers=headers, json=submit_body, timeout=60)
+        resp.raise_for_status()
+        resp_data = resp.json()
+        if resp_data.get("code") != 0:
+            raise RuntimeError(f"[MinerU] 提交 batch 失败: {resp_data}")
+        batch_id = resp_data["data"]["batch_id"]
+        upload_url = resp_data["data"]["file_urls"][0]
+        logger.info(f"[MinerU] batch_id={batch_id}, 上传文件: {file_name}")
+
+        # ---- 步骤2：PUT 上传文件字节到上传 URL（不带 Content-Type header）----
         with open(pdf_path, "rb") as f:
-            files = {"files": f}
-            response = requests.post(
-                self.mineru_url,
-                headers=headers,
-                files=files,
-                data=data,
-                verify=False,
-                timeout=300,
-            )
-        response.raise_for_status()
-        return response.json()
+            file_bytes = f.read()
+        put_resp = requests.put(upload_url, data=file_bytes, timeout=120)
+        put_resp.raise_for_status()
+        logger.info(f"[MinerU] 文件已上传: {file_name} ({len(file_bytes)} bytes)")
+
+        # ---- 步骤3：轮询解析结果 ----
+        poll_headers = {"Authorization": f"Bearer {self.mineru_token}"}
+        max_polls = 120
+        poll_interval = 3
+        full_zip_url = None
+        for i in range(max_polls):
+            time.sleep(poll_interval)
+            poll_resp = requests.get(f"{api_base}/api/v4/extract-results/batch/{batch_id}", headers=poll_headers, timeout=60)
+            poll_resp.raise_for_status()
+            poll_data = poll_resp.json()
+            if poll_data.get("code") != 0:
+                raise RuntimeError(f"[MinerU] 轮询失败: {poll_data}")
+            extract_result = poll_data.get("data", {}).get("extract_result", [])
+            if not extract_result:
+                continue
+            state = extract_result[0].get("state")
+            if state == "done":
+                full_zip_url = extract_result[0].get("full_zip_url")
+                break
+            elif state == "failed":
+                err_msg = extract_result[0].get("err_msg", "unknown")
+                raise RuntimeError(f"[MinerU] 解析失败: {err_msg}")
+            logger.debug(f"[MinerU] 轮询中... state={state} (第 {i+1}/{max_polls} 次)")
+        if not full_zip_url:
+            raise RuntimeError(f"[MinerU] 轮询超时（{max_polls * poll_interval}s），batch_id={batch_id}")
+
+        # ---- 步骤4：下载 zip 并解压 ----
+        zip_resp = requests.get(full_zip_url, timeout=120)
+        zip_resp.raise_for_status()
+        zip_file = zipfile.ZipFile(io.BytesIO(zip_resp.content))
+        logger.info(f"[MinerU] zip 已下载，包含: {zip_file.namelist()}")
+
+        # ---- 步骤5：组装与旧接口兼容的返回结构 ----
+        md_content = ""
+        content_list = []
+        middle_json = None
+        images = {}
+
+        # full.md → md_content
+        if "full.md" in zip_file.namelist():
+            md_content = zip_file.read("full.md").decode("utf-8")
+
+        # layout.json → middle_json
+        if "layout.json" in zip_file.namelist():
+            middle_json = json.loads(zip_file.read("layout.json").decode("utf-8"))
+
+        # *_content_list.json → content_list（排除 _v2 版本）
+        for name in zip_file.namelist():
+            if name.endswith("_content_list.json") and not name.endswith("_content_list_v2.json"):
+                content_list = json.loads(zip_file.read(name).decode("utf-8"))
+                break
+
+        # images/*.jpg → images dict {文件名: base64 字符串}
+        for name in zip_file.namelist():
+            if name.startswith("images/") and not name.endswith("/"):
+                img_basename = Path(name).name
+                img_bytes = zip_file.read(name)
+                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+                images[img_basename] = img_b64
+
+        zip_file.close()
+
+        result = {"results": {file_name: {
+            "md_content": md_content,
+            "content_list": content_list,
+            "middle_json": middle_json,
+            "images": images,
+        }}}
+        logger.info(f"[MinerU] 解析完成: {file_name}, md={len(md_content)}chars, images={len(images)}, content_list={len(content_list)}")
+        return result
 
     # =================== 3. 从 MinerU 返回结果中取单页数据，并按元素类型划分 ==========================
     @staticmethod
