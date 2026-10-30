@@ -999,7 +999,7 @@ router = APIRouter()
 
 @router.post("/chat/stream")
 async def chat_stream(
-    session_id: str = Body(default=None),  # 取自请求体JSON，字段为session_id，可选，默认为None
+    session_id: str | None = Body(default=None),  # 取自请求体JSON，字段为session_id，可选，默认为None
     message: str = Body(...),  # 取自请求体JSON，字段为message，必填
     current_user: TokenData = Depends(get_current_user),  # 不从body取，依赖注入
 ):

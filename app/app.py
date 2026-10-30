@@ -147,13 +147,15 @@ if os.path.isdir(FRONTEND_ASSETS_DIR):
 @app.get("/")
 async def root():
     """返回主页面。"""
-    return FileResponse(os.path.join(APP_DIR, "index.html"))
+    return FileResponse(os.path.join(APP_DIR, "index.html"),
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 @app.get("/did-auth.js")
 async def did_auth_js():
     """前端身份鉴权脚本（index.html 通过相对路径 <script src="did-auth.js"> 引用）。"""
     return FileResponse(os.path.join(APP_DIR, "did-auth.js"),
-                        media_type="application/javascript")
+                        media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 @app.get("/health")
 async def health_check():
