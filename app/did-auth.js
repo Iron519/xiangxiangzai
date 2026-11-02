@@ -209,19 +209,20 @@
   function renderUserBox() {
     const box = document.getElementById('appUserBox');
     const nameEl = document.getElementById('appUserName');
+    const avatarEl = document.getElementById('sidebarUserAvatar');
     if (currentUser && currentUser.uid) {
       nameEl.textContent = currentUser.username || currentUser.uid;
       box.style.display = 'flex';
+      if (avatarEl) {
+        const initial = (currentUser.username || currentUser.uid || 'U').charAt(0).toUpperCase();
+        avatarEl.textContent = initial;
+      }
     } else {
       box.style.display = 'none';
     }
   }
 
   function applyRolePermissions() {
-    // 顶级 Management 导航：无任何子页权限时隐藏
-    const navShared = document.getElementById('navSharedService');
-    if (navShared) {
-      const canMgmt = canAccess('stats') || canAccess('knowledge') || canAccess('voice') || canAccess('users') || canAccess('faq') || canAccess('scene');
-      navShared.style.display = canMgmt ? '' : 'none';
-    }
+    // Sidebar nav visibility is handled by renderSidebarNav() via canAccess()
+    // No top nav to toggle anymore
   }
