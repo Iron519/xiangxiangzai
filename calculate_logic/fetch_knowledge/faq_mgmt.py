@@ -9,10 +9,23 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 
-from sso_did.rbac_models import Response
-from sso_did.auth import TokenData, require_permission
+from sso_did.auth import TokenData, get_current_user
 
 load_dotenv(find_dotenv())
+
+
+class Response(BaseModel):
+    code: int = 200
+    message: str = "success"
+    data: object = None
+
+    @classmethod
+    def ok(cls, data=None):
+        return cls(data=data)
+
+    @classmethod
+    def fail(cls, code=500, message="error"):
+        return cls(code=code, message=message)
 
 # ================= 运行路径配置 ===============
 PROJECT_ROOT = os.getenv("WORK_PATH", "")
@@ -39,11 +52,7 @@ if not logger.handlers:
 # ================= 表配置 =================
 FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
 
-# 鉴权依赖：按权限码守卫
-_FAQ_READ_DEP = require_permission("faq:read")
-_FAQ_SAVE_DEP = require_permission("faq:save")
-_FAQ_DELETE_DEP = require_permission("faq:delete")
-
+# 鉴权依赖：登录即可访问
 
 # ================= Pydantic 模型 =================
 class FaqCreate(BaseModel):
@@ -101,7 +110,7 @@ router = APIRouter(prefix="/api/v1/faq", tags=["FAQ"])
 
 
 @router.get("", response_model=Response)
-async def list_faqs(_: TokenData = Depends(_FAQ_READ_DEP)):
+async def list_faqs(_: TokenData = Depends(get_current_user)):
     """查询全部 FAQ（按 id 正序，从1开始连续）。"""
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
@@ -122,7 +131,7 @@ async def list_faqs(_: TokenData = Depends(_FAQ_READ_DEP)):
 
 
 @router.post("", response_model=Response)
-async def create_faq(body: FaqCreate, current_user: TokenData = Depends(_FAQ_SAVE_DEP)):
+async def create_faq(body: FaqCreate, current_user: TokenData = Depends(get_current_user)):
     """新增单条 FAQ。"""
     q = body.question.strip()
     a = body.answer.strip()
@@ -141,7 +150,7 @@ async def create_faq(body: FaqCreate, current_user: TokenData = Depends(_FAQ_SAV
 
 
 @router.put("/{faq_id}", response_model=Response)
-async def update_faq(faq_id: int, body: FaqCreate, current_user: TokenData = Depends(_FAQ_SAVE_DEP)):
+async def update_faq(faq_id: int, body: FaqCreate, current_user: TokenData = Depends(get_current_user)):
     """修改单条 FAQ。"""
     q = body.question.strip()
     a = body.answer.strip()
@@ -163,7 +172,7 @@ async def update_faq(faq_id: int, body: FaqCreate, current_user: TokenData = Dep
 
 
 @router.delete("/{faq_id}", response_model=Response)
-async def delete_faq(faq_id: int, current_user: TokenData = Depends(_FAQ_DELETE_DEP)):
+async def delete_faq(faq_id: int, current_user: TokenData = Depends(get_current_user)):
     """删除单条 FAQ，并重排剩余行 id 保持从1开始连续。"""
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(f"SELECT id FROM {FAQ_TABLE} WHERE id=%s", (faq_id,))

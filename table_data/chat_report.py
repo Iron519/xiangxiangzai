@@ -16,8 +16,7 @@ PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from sso_did.auth import TokenData, require_permission
-_STATS_ROLE_DEP = require_permission("stats:read")
+from sso_did.auth import TokenData, get_current_user
 
 # ================= 配置运行日志 =================
 LOG_DIR = Path(PROJECT_ROOT) / "logs"
@@ -403,7 +402,7 @@ router = APIRouter()
 @router.get("/stats/overview")
 async def stats_overview(start_date: str | None = Query(default=None),
                          end_date: str | None = Query(default=None),
-                         _: TokenData = Depends(_STATS_ROLE_DEP)):
+                         _: TokenData = Depends(get_current_user)):
     """获取所有概览统计。start_date/end_date 可选，格式 YYYY-MM-DD，用于时间范围联动。"""
     logger.info(f"[API] 获取概览统计 range={start_date}~{end_date}")
     try:

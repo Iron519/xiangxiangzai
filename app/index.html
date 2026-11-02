@@ -182,7 +182,7 @@
     }    .sidebar-chat-item:hover { background: var(--c-sidebar-hover); }
     .sidebar-chat-item.active { background: var(--c-secondary); color: var(--c-secondary-fg); }
 
-    /* ── Sidebar: Nav menu (知识库/数据监控/对话洞察/用户管理) ── */
+    /* ── Sidebar: Nav menu (知识库/数据监控/对话洞察) ── */
     .sidebar-nav {
       padding: 8px 8px; flex-shrink: 0; border-top: 1px solid var(--c-border);
     }
@@ -961,10 +961,10 @@
       <div class="sidebar-nav" id="sidebarNav"></div>
 
       <!-- User box -->
-      <div class="sidebar-user" id="appUserBox" style="display:none">
+      <div class="sidebar-user" id="appUserBox" style="display:none;cursor:pointer" onclick="openProfile()" title="个人设置">
         <div class="sidebar-user-avatar" id="sidebarUserAvatar">U</div>
         <span class="sidebar-user-name" id="appUserName"></span>
-        <button class="sidebar-user-logout" id="appLogoutBtn" title="退出登录">
+        <button class="sidebar-user-logout" id="appLogoutBtn" title="退出登录" onclick="event.stopPropagation()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
         </button>
       </div>
@@ -1301,49 +1301,6 @@
           </div>
         </div>
 
-        <!-- ─────────── 用户管理 ─────────── -->
-        <div class="page-panel" id="panel-users">
-          <div class="page-scroll">
-            <div style="padding:20px 24px 0">
-              <!-- 搜索区 -->
-              <div class="step-section">
-                <div class="step-header" style="display:flex;align-items:center;gap:12px;flex-wrap:nowrap">
-                  <span class="step-title">
-                    <svg width="16" height="16" viewBox="0 0 20 20" fill="none"><path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 17c0-3 2.7-5 6-5s6 2 6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    User Management
-                  </span>
-                  <button class="btn-secondary small-btn" style="margin-left:auto" onclick="loadUsers()">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1-3M2 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                    Refresh
-                  </button>
-                  <button class="btn-primary small-btn" onclick="openUserEdit()">+ New</button>
-                </div>
-              </div>
-
-              <!-- 表格 -->
-              <div class="step-section">
-                <div id="userLoading" style="text-align:center;padding:24px;color:var(--c-text-3)">Loading...</div>
-                <div id="userTableWrap" style="display:none">
-                  <table class="kb-file-table">
-                    <thead><tr>
-                      <th onclick="sortUsers('uid')" class="th-sortable">UID <span id="userSort-uid" class="sort-arrow"></span></th>
-                      <th onclick="sortUsers('displayName')" class="th-sortable">Username <span id="userSort-displayName" class="sort-arrow"></span></th>
-                      <th onclick="sortUsers('email')" class="th-sortable">Email <span id="userSort-email" class="sort-arrow"></span></th>
-                      <th>Department</th>
-                      <th>Roles</th>
-                      <th style="width:120px;text-align:center">Status</th>
-                      <th style="width:140px;text-align:center">Operation</th>
-                    </tr></thead>
-                    <tbody id="userTableBody"></tbody>
-                  </table>
-                  <div id="userEmpty" style="display:none;text-align:center;padding:24px;color:var(--c-text-3)"></div>
-                  <div class="pagination" id="userPagination" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px;align-items:center"></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- ─────────── 与我聊天 ─────────── -->
         <div class="page-panel" id="panel-chat">
           <div class="chat-shell">
@@ -1457,54 +1414,25 @@
   </div>
 </div>
 
-<!-- 用户编辑弹窗 -->
-<div class="modal-overlay" id="userEditModal" style="display:none">
-  <div class="modal-dialog" style="max-width:560px">
-    <div class="modal-header" id="userEditTitle">New User</div>
+<!-- 个人设置弹窗（修改昵称/密码） -->
+<div class="modal-overlay" id="profileModal" style="display:none">
+  <div class="modal-dialog" style="max-width:400px">
+    <div class="modal-header">个人设置</div>
     <div class="modal-body">
-      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px" for="userUid">UID <span style="color:var(--c-rose)">*</span></label>
-      <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Unique employee identifier</span>
-      <input type="text" class="modal-input" id="userUid" placeholder="e.g. U0048399" />
-      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px;margin-top:12px" for="userDisplayName">Username <span style="color:var(--c-rose)">*</span></label>
-      <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Display name shown in the system</span>
-      <input type="text" class="modal-input" id="userDisplayName" placeholder="Display name" />
-      <div style="display:flex;gap:12px;margin-top:12px">
-        <div style="flex:1">
-          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px" for="userEmail">Email</label>
-          <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Optional</span>
-          <input type="text" class="modal-input" id="userEmail" placeholder="email@bmw.com" />
-        </div>
-        <div style="flex:1">
-          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px" for="userMobile">Mobile</label>
-          <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Optional</span>
-          <input type="text" class="modal-input" id="userMobile" placeholder="13800138000" />
-        </div>
+      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">昵称</label>
+      <input type="text" class="modal-input" id="profileDisplayName" placeholder="设置你的昵称" style="width:100%;margin-bottom:16px" />
+      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">新密码</label>
+      <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">留空则不修改</span>
+      <input type="password" class="modal-input" id="profileNewPassword" placeholder="输入新密码（可选）" style="width:100%;margin-bottom:12px" />
+      <div id="profileOldPwdWrap" style="display:none">
+        <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">当前密码</label>
+        <input type="password" class="modal-input" id="profileOldPassword" placeholder="修改密码需验证当前密码" style="width:100%;margin-bottom:12px" />
       </div>
-      <div style="display:flex;gap:12px;margin-top:12px">
-        <div style="flex:1">
-          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px" for="userDepartment">Department</label>
-          <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Optional</span>
-          <input type="text" class="modal-input" id="userDepartment" placeholder="Department" />
-        </div>
-        <div style="flex:1">
-          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px" for="userEmployeeType">Employee Type</label>
-          <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Optional</span>
-          <input type="text" class="modal-input" id="userEmployeeType" placeholder="BBA" />
-        </div>
-      </div>
-      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px;margin-top:12px" for="userStatus">Status</label>
-      <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Enable or disable user access</span>
-      <select class="modal-input" id="userStatus">
-        <option value="Enabled">Enabled</option>
-        <option value="Disabled">Disabled</option>
-      </select>
-      <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px;margin-top:12px">Roles</label>
-      <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:4px">Assign role permissions</span>
-      <div id="userRolesBox" style="display:flex;flex-wrap:wrap;gap:8px 16px;padding:6px 0"></div>
+      <p class="modal-hint" id="profileHint" style="margin:2px 0 0;font-size:var(--fs-xs);color:var(--c-text-2)"></p>
     </div>
     <div class="modal-footer">
-      <button class="btn-secondary" onclick="closeUserEdit()">Cancel</button>
-      <button class="btn-primary" onclick="saveUser()">Save</button>
+      <button class="btn-secondary" onclick="closeProfile()">取消</button>
+      <button class="btn-primary" onclick="saveProfile()">保存</button>
     </div>
   </div>
 </div>
@@ -1522,7 +1450,7 @@
       <div id="authPanelPassword">
         <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">用户名</label>
         <div style="display:flex;gap:8px;margin-bottom:12px">
-          <input type="text" class="modal-input" id="authUsername" placeholder="3-30 位字母/数字/下划线" style="flex:1" />
+          <input type="text" class="modal-input" id="authUsername" placeholder="3-30 个字符" style="flex:1" />
         </div>
         <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">密码</label>
         <div style="display:flex;gap:8px;margin-bottom:12px">
@@ -1532,6 +1460,12 @@
           <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">确认密码</label>
           <div style="display:flex;gap:8px;margin-bottom:12px">
             <input type="password" class="modal-input" id="authConfirmPwd" placeholder="再次输入密码" style="flex:1" />
+          </div>
+        </div>
+        <div id="authReasonWrap" style="display:none">
+          <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">申请理由</label>
+          <div style="display:flex;gap:8px;margin-bottom:12px">
+            <input type="text" class="modal-input" id="authApplyReason" placeholder="请简述您的使用需求" style="flex:1" />
           </div>
         </div>
         <p class="modal-hint" id="authPwdHint" style="margin:2px 0 0;font-size:var(--fs-xs);color:var(--c-text-2)"></p>
@@ -1596,7 +1530,7 @@
 
 <script src="did-auth.js"></script>
 <script>
-  // 身份鉴权（账号密码 + Redis Session + RBAC 前端）已抽离至 did-auth.js。
+  // 身份鉴权（账号密码 + Redis Session，无 RBAC）已抽离至 did-auth.js。
   // 加载顺序：先定义 STORE_PREFIX/Store（本文件上方第一个 script）→ did-auth.js → 本主 script。
   // 它声明的 getAccessToken / apiFetch / currentUser / hasRole / canAccess /
   // webLogout / switchAuthTab / openLogin / closeLogin /
@@ -1615,7 +1549,7 @@
     currentPage = pageId;
 
     // Update topbar title
-    const titles = { home: '象劳厮', chat: '象劳厮', knowledge: '知识库', stats: '数据监控', users: '用户管理', faq: 'FAQ 管理', scene: '场景模板' };
+    const titles = { home: '象劳厮', chat: '象劳厮', knowledge: '知识库', stats: '数据监控', faq: 'FAQ 管理', scene: '场景模板' };
     const titleEl = document.getElementById('topbarTitle');
     if (titleEl) titleEl.textContent = titles[pageId] || '象劳厮';
 
@@ -1632,7 +1566,6 @@
     // Trigger data load
     if (pageId === 'stats') loadStats();
     if (pageId === 'knowledge') { loadFileList(); restoreUploadTasks(); }
-    if (pageId === 'users') loadUsers();
     if (pageId === 'scene') loadSceneList();
     if (pageId === 'faq') loadFaqList();
   }
@@ -1666,7 +1599,6 @@
     { id: 'knowledge', label: '知识库', icon: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>' },
     { id: 'stats', label: '数据监控', icon: '<path d="M12 16v5"/><path d="M16 14v7"/><path d="M20 10v11"/><path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15"/><path d="M4 18v3"/><path d="M8 14v7"/>' },
     { id: 'faq', label: '对话洞察', icon: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>' },
-    { id: 'users', label: '用户管理', icon: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>' },
   ];
 
   // ==================== Drawer ====================
@@ -2706,211 +2638,77 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     type();
   }
 
-  // ==================== 用户管理 ====================
-  let _users = [];           // 当前页用户
-  let _userTotal = 0;
-  let _userPage = { no: 1, size: 10 };
-  let _userSort = { field: 'uid', asc: true };
-  let _userEditingId = null; // null=新增；非空=编辑该 id
-  let _allRoles = [];        // [{id,code,name}] 可分配角色，编辑弹窗勾选用
-  let _roleNameMap = {};     // id -> name
-
-  async function loadRoles() {
+  // ==================== 个人设置（修改昵称/密码） ====================
+  async function openProfile() {
+    const hint = document.getElementById('profileHint');
+    if (hint) hint.textContent = '';
+    document.getElementById('profileNewPassword').value = '';
+    document.getElementById('profileOldPassword').value = '';
+    document.getElementById('profileOldPwdWrap').style.display = 'none';
     try {
-      const res = await apiFetch('/api/v1/roles?status=Enabled');
+      const res = await apiFetch('/api/v1/auth/me');
       const data = await res.json();
-      _allRoles = (data.code === 200 && data.data) || [];
-      _roleNameMap = {};
-      _allRoles.forEach(r => { _roleNameMap[r.id] = r.name || r.code; });
-    } catch (e) { _allRoles = []; }
-  }
-
-  async function loadUsers() {
-    const loading = document.getElementById('userLoading');
-    const wrap = document.getElementById('userTableWrap');
-    loading.style.display = ''; wrap.style.display = 'none';
-    try {
-      if (!_allRoles.length) await loadRoles();
-      const params = new URLSearchParams({
-        pageNo: _userPage.no, pageSize: _userPage.size,
-        sortField: _userSort.field, sortAsc: _userSort.asc,
-      });
-      const res = await apiFetch(`/api/v1/users/page?${params}`);
-      const data = await res.json();
-      if (data.code !== 200) throw new Error(data.message || 'Failed to load');
-      _users = (data.data && data.data.data) || [];
-      _userTotal = (data.data && data.data.total) || 0;
-      wrap.style.display = ''; loading.style.display = 'none';
-      renderUserTable();
-    } catch (e) {
-      loading.textContent = 'Load failed: ' + e.message;
-    }
-  }
-
-  function renderUserTable() {
-    const { field, asc } = _userSort;
-    let rows = [..._users];
-    rows.sort((a, b) => {
-      const va = (a[field] == null ? '' : String(a[field])).toLowerCase();
-      const vb = (b[field] == null ? '' : String(b[field])).toLowerCase();
-      return va < vb ? (asc ? -1 : 1) : va > vb ? (asc ? 1 : -1) : 0;
-    });
-    ['uid', 'displayName', 'email'].forEach(f => {
-      const el = document.getElementById('userSort-' + f);
-      if (el) el.textContent = (f === field) ? (asc ? '▲' : '▼') : '';
-    });
-
-    const body = document.getElementById('userTableBody');
-    const empty = document.getElementById('userEmpty');
-    if (!rows.length) { body.innerHTML = ''; empty.style.display = ''; return; }
-    empty.style.display = '';
-    body.innerHTML = rows.map(u => {
-      const roles = (u.roleIds || []).map(rid => `<span class="perm-tag">${escapeHtml(_roleNameMap[rid] || ('#' + rid))}</span>`).join(' ') || '<span style="color:var(--c-text-3)">—</span>';
-      const displayName = formatDisplayName(u.displayName || '');
-      return `
-      <tr>
-        <td>${escapeHtml(u.uid || '')}</td>
-        <td>${escapeHtml(displayName)}</td>
-        <td style="color:var(--c-text-3)">${escapeHtml(u.email || '—')}</td>
-        <td>${escapeHtml(u.department || '—')}</td>
-        <td>${roles}</td>
-        <td style="text-align:center">
-          <span class="status-dot ${u.status === 'Enabled' ? 'ok' : 'off'}"></span>${escapeHtml(u.status || '')}
-        </td>
-        <td style="text-align:center">
-          <button class="btn-secondary small-btn" onclick="openUserEdit(${u.id})">Edit</button>
-          <button class="btn-delete small-btn" onclick="confirmDeleteUser(${u.id}, '${escapeHtml(u.uid || '')}')">Delete</button>
-        </td>
-      </tr>`;
-    }).join('');
-    renderUserPagination();
-  }
-
-  function formatDisplayName(name) {
-    if (!name) return '';
-    const parts = name.trim().split(/\s+/);
-    if (parts.length === 0) return '';
-    
-    const lastPart = parts[parts.length - 1];
-    const uidPattern = /^[A-Za-z]+\d+$/;
-    
-    if (uidPattern.test(lastPart)) {
-      parts.pop();
-    }
-    
-    if (parts.length >= 2) {
-      return parts[1] + ' ' + parts[0];
-    }
-    return parts.join(' ');
-  }
-
-  function renderUserPagination() {
-    const pg = document.getElementById('userPagination');
-    const pages = Math.max(1, Math.ceil(_userTotal / _userPage.size));
-    if (_userTotal <= _userPage.size) { pg.style.display = 'none'; return; }
-    pg.style.display = '';
-    const cur = _userPage.no;
-    let html = `<button class="btn-secondary small-btn" ${cur <= 1 ? 'disabled' : ''} onclick="gotoUserPage(${cur - 1})">‹ Prev</button>`;
-    html += `<span style="font-size:var(--fs-sm);color:var(--c-text-2)">${cur} / ${pages}</span>`;
-    html += `<button class="btn-secondary small-btn" ${cur >= pages ? 'disabled' : ''} onclick="gotoUserPage(${cur + 1})">Next ›</button>`;
-    pg.innerHTML = html;
-  }
-
-  function gotoUserPage(n) { _userPage.no = n; loadUsers(); }
-
-  function sortUsers(field) {
-    if (_userSort.field === field) _userSort.asc = !_userSort.asc;
-    else { _userSort.field = field; _userSort.asc = true; }
-    loadUsers();
-  }
-
-  async function openUserEdit(id) {
-    _userEditingId = id || null;
-    if (!_allRoles.length) await loadRoles();
-    const title = document.getElementById('userEditTitle');
-    const rolesBox = document.getElementById('userRolesBox');
-    // 渲染角色勾选
-    rolesBox.innerHTML = _allRoles.map(r => `
-      <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-        <input type="checkbox" value="${r.id}" class="user-role-cb"> ${escapeHtml(r.name || r.code)}
-      </label>`).join('') || '<span style="color:var(--c-text-3)">No roles available</span>';
-
-    if (id) {
-      try {
-        const res = await apiFetch(`/api/v1/users/${id}`);
-        const data = await res.json();
-        const u = (data.code === 200 && data.data) || {};
-        title.textContent = 'Edit User';
-        document.getElementById('userUid').value = u.uid || '';
-        document.getElementById('userUid').disabled = true;
-        document.getElementById('userDisplayName').value = u.displayName || '';
-        document.getElementById('userEmail').value = u.email || '';
-        document.getElementById('userMobile').value = u.mobile || '';
-        document.getElementById('userDepartment').value = u.department || '';
-        document.getElementById('userEmployeeType').value = u.employeeType || '';
-        document.getElementById('userStatus').value = u.status || 'Enabled';
-        const roleIds = u.roleIds || [];
-        rolesBox.querySelectorAll('.user-role-cb').forEach(cb => { cb.checked = roleIds.includes(Number(cb.value)); });
-      } catch (e) { await showAlert('Error', 'Failed to load user: ' + e.message); return; }
-    } else {
-      title.textContent = 'New User';
-      document.getElementById('userUid').value = '';
-      document.getElementById('userUid').disabled = false;
-      ['userDisplayName', 'userEmail', 'userMobile', 'userDepartment', 'userEmployeeType'].forEach(k => document.getElementById(k).value = '');
-      document.getElementById('userStatus').value = 'Enabled';
-      rolesBox.querySelectorAll('.user-role-cb').forEach(cb => { cb.checked = false; });
-    }
-    document.getElementById('userEditModal').style.display = 'flex';
-  }
-
-  function closeUserEdit() { document.getElementById('userEditModal').style.display = 'none'; }
-
-  async function saveUser() {
-    const uidEl = document.getElementById('userUid');
-    const nameEl = document.getElementById('userDisplayName');
-    const uid = uidEl.value.trim();
-    const displayName = nameEl.value.trim();
-    uidEl.style.borderColor = ''; nameEl.style.borderColor = '';
-    let missing = [];
-    if (!uid) { uidEl.style.borderColor = 'var(--c-rose)'; missing.push('UID'); }
-    if (!displayName) { nameEl.style.borderColor = 'var(--c-rose)'; missing.push('Username'); }
-    if (missing.length) { await showAlert('Required', `${missing.join(' and ')} ${missing.length > 1 ? 'are' : 'is'} required`); return; }
-    const roleIds = Array.from(document.querySelectorAll('.user-role-cb:checked')).map(cb => Number(cb.value));
-    const payload = {
-      uid, displayName,
-      email: document.getElementById('userEmail').value.trim() || null,
-      mobile: document.getElementById('userMobile').value.trim() || null,
-      department: document.getElementById('userDepartment').value.trim() || null,
-      employeeType: document.getElementById('userEmployeeType').value.trim() || null,
-      status: document.getElementById('userStatus').value,
-      roleIds,
-    };
-    try {
-      const url = _userEditingId ? `/api/v1/users/${_userEditingId}` : '/api/v1/users';
-      const method = _userEditingId ? 'PUT' : 'POST';
-      const res = await apiFetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const data = await res.json();
-      if (data.code !== 200) throw new Error(data.message || 'Save failed');
-      closeUserEdit();
-      await loadUsers();
-      await showAlert('Success', _userEditingId ? 'Updated' : 'Created');
-    } catch (e) {
-      await showAlert('Error', e.message);
-    }
-  }
-
-  function confirmDeleteUser(id, uid) {
-    showConfirm('Delete User', `Delete user "${uid}"?`).then(async (ok) => {
-      if (!ok) return;
-      try {
-        const res = await apiFetch(`/api/v1/users/${id}`, { method: 'DELETE' });
-        const data = await res.json();
-        if (data.code !== 200) throw new Error(data.message || 'Delete failed');
-        await loadUsers();
-      } catch (e) {
-        await showAlert('Error', e.message);
+      if (data.code === 200 && data.data) {
+        document.getElementById('profileDisplayName').value = data.data.username || '';
       }
-    });
+    } catch (e) { /* ignore */ }
+    document.getElementById('profileModal').style.display = 'flex';
+  }
+
+  function closeProfile() {
+    document.getElementById('profileModal').style.display = 'none';
+  }
+
+  async function saveProfile() {
+    const hint = document.getElementById('profileHint');
+    const displayName = document.getElementById('profileDisplayName').value.trim();
+    const newPassword = document.getElementById('profileNewPassword').value;
+    const oldPassword = document.getElementById('profileOldPassword').value;
+    if (hint) hint.textContent = '';
+
+    if (newPassword) {
+      document.getElementById('profileOldPwdWrap').style.display = '';
+      if (!oldPassword) {
+        if (hint) hint.textContent = '修改密码需输入当前密码';
+        return;
+      }
+      try {
+        const res = await apiFetch('/api/v1/auth/change-password', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ oldPassword, newPassword }),
+        });
+        const data = await res.json();
+        if (data.code !== 200) {
+          if (hint) hint.textContent = data.message || '密码修改失败';
+          return;
+        }
+      } catch (e) {
+        if (hint) hint.textContent = '密码修改失败：' + e.message;
+        return;
+      }
+    }
+
+    if (displayName && displayName !== (currentUser && currentUser.username)) {
+      try {
+        const res = await apiFetch('/api/v1/auth/profile', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ displayName }),
+        });
+        const data = await res.json();
+        if (data.code !== 200) {
+          if (hint) hint.textContent = data.message || '昵称修改失败';
+          return;
+        }
+      } catch (e) {
+        if (hint) hint.textContent = '昵称修改失败：' + e.message;
+        return;
+      }
+    }
+
+    if (hint) hint.textContent = '保存成功';
+    await fetchCurrentUser(true);
+    renderUserBox();
+    setTimeout(() => closeProfile(), 1000);
   }
 
   // ==================== Scenario Template 管理 ====================

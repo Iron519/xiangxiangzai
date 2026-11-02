@@ -22,10 +22,7 @@ from table_data.chat_tag import tag_loop
 from calculate_logic.chunk_pipeline.routes import router as chunk_router
 from table_data.chat_report import router as report_router
 from calculate_logic.chunk_pipeline.routes import recover_queued_tasks
-from sso_did.auth_api import router as auth_router
-from sso_did.users_api import router as users_router
-from sso_did.roles_api import router as roles_router
-from sso_did.permissions_api import router as permissions_router
+from sso_did.auth_service import auth_router, users_router
 from sso_did.auth import get_current_user, TokenData
 from calculate_logic.fetch_knowledge.faq_mgmt import router as faq_router
 from calculate_logic.rag.scene_template_mgmt import router as scene_template_router
@@ -65,8 +62,6 @@ app.include_router(chunk_router)
 app.include_router(report_router)
 app.include_router(auth_router)
 app.include_router(users_router)
-app.include_router(roles_router)
-app.include_router(permissions_router)
 app.include_router(faq_router)
 app.include_router(scene_template_router)
 

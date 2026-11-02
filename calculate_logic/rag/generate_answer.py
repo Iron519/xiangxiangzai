@@ -62,7 +62,7 @@ from calculate_logic.tools.leave_record import query_leave_record
 from calculate_logic.tools.working_time import query_working_time
 from calculate_logic.tools.personal_info import query_personal_info
 from sso_did.auth import TokenData, get_current_user
-from sso_did.rbac_service import UserService
+from sso_did.auth_service import get_user_by_uid
 
 # ================= 定义Langchain风格的LLM客户端（深入版） =================
 _llm_client = None
@@ -948,8 +948,8 @@ def close_checkpointer() -> None:  # 关闭 checkpoint 连接池。供应用关�
 # /test U00XXXXX 命令解析：admin 用户可模拟指定 uid 进行测试
 _TEST_UID_PATTERN = re.compile(r"^/test\s+(U00\d{5})\s*(.*)", re.DOTALL)
 
-def _parse_test_command(message: str, current_user: TokenData) -> tuple[str, str]:  # 解析 /test U00XXXXX 命令。
-    if not current_user.has_role("admin"):
+def _parse_test_command(message: str, current_user: TokenData) -> tuple[str, str]:
+    if not current_user.is_admin:
         return current_user.uid, message
     m = _TEST_UID_PATTERN.match(message.strip())
     if m:
@@ -1012,15 +1012,16 @@ async def chat_stream(
     current_state = await _get_current_state(session_id)
     turn_count = (current_state.get("turn_count", 0) + 1) if current_state else 1
 
-    # 合并 JWT 层（uid/username/roles）+ sys_user 库表，供链路各节点按需取用。
-    # 仅在首轮构建时查一次；后续轮次 history 恢复的 state 已无 user 字段，按需补注。
-    user_svc = UserService()
+    # 从单表取用户画像，供链路各节点按需取用。
     try:
-        user_profile = user_svc.get_full_user(uid, current_user.roles, current_user.permissions)
-        user_dict = user_profile.model_dump()
+        user_row = get_user_by_uid(uid)
+        user_dict = {
+            "uid": uid,
+            "username": (user_row or {}).get("username") or current_user.username or uid,
+        } if user_row else {"uid": uid, "username": current_user.username or uid}
     except Exception as e:
-        logger.warning(f"[ChatStream] 取用户画像失败，退化为 JWT 层: {e}")
-        user_dict = {"uid": uid, "username": current_user.username or uid, "roles": current_user.roles, "permissions": current_user.permissions}
+        logger.warning(f"[ChatStream] 取用户画像失败，退化为 token 层: {e}")
+        user_dict = {"uid": uid, "username": current_user.username or uid}
 
     initial_state: ChatState = _build_initial_state(session_id, message, turn_count, user=user_dict)
     

@@ -10,10 +10,23 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 
-from sso_did.rbac_models import Response
-from sso_did.auth import TokenData, require_permission
+from sso_did.auth import TokenData, get_current_user
 
 load_dotenv(find_dotenv())
+
+
+class Response(BaseModel):
+    code: int = 200
+    message: str = "success"
+    data: object = None
+
+    @classmethod
+    def ok(cls, data=None):
+        return cls(data=data)
+
+    @classmethod
+    def fail(cls, code=500, message="error"):
+        return cls(code=code, message=message)
 
 # ================= 运行路径配置 ===============
 PROJECT_ROOT = os.getenv("WORK_PATH", "")
@@ -40,11 +53,7 @@ if not logger.handlers:
 # ================= 表配置 =================
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
-# 鉴权依赖：复用 FAQ 权限码（读/写/删同源，直接对齐 faq 板块）
-_SCENE_READ_DEP = require_permission("faq:read")
-_SCENE_SAVE_DEP = require_permission("faq:save")
-_SCENE_DELETE_DEP = require_permission("faq:delete")
-
+# 鉴权依赖：登录即可访问
 
 # ================= Pydantic 模型 =================
 class SceneTemplateCreate(BaseModel):
@@ -75,7 +84,7 @@ router = APIRouter(prefix="/api/v1/scene-templates", tags=["SceneTemplate"])
 
 
 @router.get("", response_model=Response)
-async def list_scene_templates(_: TokenData = Depends(_SCENE_READ_DEP)):
+async def list_scene_templates(_: TokenData = Depends(get_current_user)):
     """查询全部场景模板（按 id 正序）。"""
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
@@ -100,7 +109,7 @@ async def list_scene_templates(_: TokenData = Depends(_SCENE_READ_DEP)):
 
 
 @router.post("", response_model=Response)
-async def create_scene_template(body: SceneTemplateCreate, current_user: TokenData = Depends(_SCENE_SAVE_DEP)):
+async def create_scene_template(body: SceneTemplateCreate, current_user: TokenData = Depends(get_current_user)):
     """新增单条场景模板。"""
     sid = body.scene_id.strip()
     name = body.name.strip()
@@ -127,7 +136,7 @@ async def create_scene_template(body: SceneTemplateCreate, current_user: TokenDa
 
 
 @router.put("/{scene_id}", response_model=Response)
-async def update_scene_template(scene_id: str, body: SceneTemplateCreate, current_user: TokenData = Depends(_SCENE_SAVE_DEP)):
+async def update_scene_template(scene_id: str, body: SceneTemplateCreate, current_user: TokenData = Depends(get_current_user)):
     """修改单条场景模板（按 scene_id 定位）。"""
     sid = body.scene_id.strip()
     name = body.name.strip()
@@ -151,7 +160,7 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
 
 
 @router.delete("/{scene_id}", response_model=Response)
-async def delete_scene_template(scene_id: str, current_user: TokenData = Depends(_SCENE_DELETE_DEP)):
+async def delete_scene_template(scene_id: str, current_user: TokenData = Depends(get_current_user)):
     """删除单条场景模板（删除即停用：判定表将不再包含该场景）。"""
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))

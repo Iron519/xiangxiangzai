@@ -20,12 +20,7 @@ from calculate_logic.chunk_pipeline.chunk import (
 from calculate_logic.chunk_pipeline.embedding import EmbeddingModel, store_semantic_chunks
 from calculate_logic.chunk_pipeline.rewrite import rewrite_chunks_with_coref
 from calculate_logic.fetch_knowledge.parse_file import DocumentParser
-from sso_did.auth import TokenData, require_permission
-# 知识库/统计接口改权限码驱动：admin 在权限管理页给角色勾选对应权限码即可自定义操作范围。
-# kb:read 看知识库；kb:upload 上传/中止任务；kb:delete 删文件/任务；stats:read 看统计。
-_KB_READ_DEP = require_permission("kb:read")
-_KB_UPLOAD_DEP = require_permission("kb:upload")
-_KB_DELETE_DEP = require_permission("kb:delete")
+from sso_did.auth import TokenData, get_current_user
 
 
 # ============================================================
@@ -586,7 +581,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"
 @router.post("/chunk/upload")
 async def upload_file(file: UploadFile = File(...), display_name: str = Form(None),
                       expire_time: str = Form(None), if_show: bool = Form(False),
-                      current_user: TokenData = Depends(_KB_UPLOAD_DEP)):
+                      current_user: TokenData = Depends(get_current_user)):
     """上传知识库文件，保存后立即返回 task_id，后台异步执行解析入库流程。
 
     display_name: 可选，前端指定的展示文件名（不含路径）。不传则使用原始文件名。
@@ -693,7 +688,7 @@ KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "")
 
 
 @router.get("/kb/files")
-async def kb_files(_: TokenData = Depends(_KB_READ_DEP)):
+async def kb_files(_: TokenData = Depends(get_current_user)):
     """返回知识库中所有文件的聚合信息列表。
 
     包含两类文件：
@@ -793,7 +788,7 @@ async def kb_files(_: TokenData = Depends(_KB_READ_DEP)):
 
 
 @router.get("/kb/upload-status")
-async def kb_upload_status(current_user: TokenData = Depends(_KB_READ_DEP)):
+async def kb_upload_status(current_user: TokenData = Depends(get_current_user)):
     """返回当前用户的上传任务状态列表（从 PG 读取，多 worker 共享）。"""
     tasks = await asyncio.to_thread(_list_tasks, current_user.uid)
     serialized = [_serialize_task(t) for t in tasks]
@@ -801,7 +796,7 @@ async def kb_upload_status(current_user: TokenData = Depends(_KB_READ_DEP)):
 
 
 @router.get("/kb/file/{file_name}/parents")
-async def kb_file_parents(file_name: str, _: TokenData = Depends(_KB_READ_DEP)):
+async def kb_file_parents(file_name: str, _: TokenData = Depends(get_current_user)):
     """返回指定文件的父块列表（internal_id='0' 的切片即为父块）。"""
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
@@ -839,7 +834,7 @@ async def kb_file_parents(file_name: str, _: TokenData = Depends(_KB_READ_DEP)):
 
 
 @router.delete("/kb/file/{file_name}")
-async def kb_file_delete(file_name: str, _: TokenData = Depends(_KB_DELETE_DEP)):
+async def kb_file_delete(file_name: str, _: TokenData = Depends(get_current_user)):
     """删除指定文件：清知识库切片（如有）+ 删上传任务记录（如有）+ 删磁盘物理文件（如有）。
 
     覆盖三类情形：
@@ -890,7 +885,7 @@ async def kb_file_delete(file_name: str, _: TokenData = Depends(_KB_DELETE_DEP))
 
 
 @router.delete("/kb/task/{task_id}")
-async def kb_task_delete(task_id: str, _: TokenData = Depends(_KB_DELETE_DEP)):
+async def kb_task_delete(task_id: str, _: TokenData = Depends(get_current_user)):
     """删除一条上传任务记录（主要用于清理 failed/cancelled 任务，让 Upload Status 区干净）。
 
     - 删任务记录；
@@ -951,7 +946,7 @@ async def kb_task_delete(task_id: str, _: TokenData = Depends(_KB_DELETE_DEP)):
 
 
 @router.post("/kb/task/{task_id}/cancel")
-async def kb_task_cancel(task_id: str, _: TokenData = Depends(_KB_UPLOAD_DEP)):
+async def kb_task_cancel(task_id: str, _: TokenData = Depends(get_current_user)):
     """中止一个上传任务。
 
     - queued：直接删任务记录，立即生效（还没开始跑）；
@@ -1062,7 +1057,7 @@ class ParsedTextUpdate(BaseModel):
 
 
 @router.get("/kb/file/{file_name}/parsed-text")
-async def kb_file_parsed_text(file_name: str, _: TokenData = Depends(_KB_READ_DEP)):
+async def kb_file_parsed_text(file_name: str, _: TokenData = Depends(get_current_user)):
     """返回指定文件整篇解析结果（merged.md）文本，供前端查看/编辑。"""
     row = _kb_file_row(file_name)
     if not row:
@@ -1079,7 +1074,7 @@ async def kb_file_parsed_text(file_name: str, _: TokenData = Depends(_KB_READ_DE
 
 @router.put("/kb/file/{file_name}/parsed-text")
 async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
-                                     _: TokenData = Depends(_KB_UPLOAD_DEP)):
+                                     _: TokenData = Depends(get_current_user)):
     """把编辑后的全文写回 merged.md（供之后重新切片入库）。"""
     row = _kb_file_row(file_name)
     if not row:
@@ -1097,7 +1092,7 @@ async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
 
 
 @router.post("/kb/file/{file_name}/rechunk")
-async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(_KB_UPLOAD_DEP)):
+async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """用当前 merged.md 全文重新切片入库（跳过解析）。异步执行，返回 task_id。"""
     row = _kb_file_row(file_name)
     if not row:
