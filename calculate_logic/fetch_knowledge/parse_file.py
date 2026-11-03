@@ -118,27 +118,37 @@ class DocumentParser:
         return full_text
 
     # ============================================================
+    # 自动检测编码读取文本文件：UTF-8 → GB18030 → GBK → GB2312
+    # ============================================================
+    _ENCODING_FALLBACK = ['utf-8', 'gb18030', 'gbk', 'gb2312', 'big5', 'latin-1']
+
+    def _read_text_auto(self, file_path: str) -> str:
+        with open(file_path, 'rb') as f:
+            raw_bytes = f.read()
+        for enc in self._ENCODING_FALLBACK:
+            try:
+                return raw_bytes.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                continue
+        return raw_bytes.decode('utf-8', errors='replace')
+
+    # ============================================================
     # 纯文本文件解析，并使用_enhance_text_to_markdown转为markdown格式
     # ============================================================
     def _parse_text(self, file_path: str) -> str:
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                raw = f.read()
+            raw = self._read_text_auto(file_path)
             if not raw or not raw.strip():
                 return ""
             ext = os.path.splitext(file_path)[1].lower()
-            if ext == '.md':  # .md 文件无需LLM的markdown增强，直接返回原始内容
+            if ext == '.md':
                 text = raw.strip()
-            elif len(raw.strip()) < 50:  # 短文本跳过LLM增强
+            elif len(raw.strip()) < 50:
                 text = raw.strip()
             else:
                 text = self._enhance_text_to_markdown(raw)
-            # 统一落盘 merged.md：txt/md/csv 也支持前端"查看/编辑解析结果"
             self._write_merged_md(self._office_output_dir(file_path), text)
             return text
-        except UnicodeDecodeError:
-            logger.error(f"文件编码错误（非 UTF-8）：{file_path}")
-            return ""
         except PermissionError:
             logger.error(f"文件权限不足：{file_path}")
             return ""

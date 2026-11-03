@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: YTX519PGmm
       POSTGRES_DB: my_agent
       POSTGRES_INITDB_ARGS: "-E UTF8"
+      TZ: Asia/Shanghai
+      PGTZ: Asia/Shanghai
     ports:
       - "5432:5432"
     volumes:
@@ -20,6 +22,8 @@ services:
   my_agent_redis:
     image: redis:7-alpine
     container_name: Redis
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "6379:6379"
     volumes:
@@ -35,6 +39,8 @@ services:
     image: myagent-python
     container_name: Python
     working_dir: /app
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "8099:8099"
     volumes:

@@ -35,7 +35,7 @@ class EmbeddingModel:
         model: str | None = None,
         base_url: str | None = None,
         access_code: str | None = None,
-        batch_size: int = 32,
+        batch_size: int = 20,
         timeout: float = 30.0,
     ):
         self.model = (os.getenv("EMBEDDING_MODEL") or model or "").strip()
