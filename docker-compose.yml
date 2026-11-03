@@ -39,7 +39,12 @@ services:
       - "8099:8099"
     volumes:
       - .:/app
-    command: sleep infinity
+    command: uvicorn app.app:app --host 0.0.0.0 --port 8099 --workers 1
+    depends_on:
+      my_agent_db:
+        condition: service_healthy
+      my_agent_redis:
+        condition: service_healthy
 
 volumes:
   pg_data:
