@@ -1,7 +1,7 @@
 import os
 import re
 import json
-import time
+import asyncio
 import logging
 import shutil
 import zipfile
@@ -9,12 +9,11 @@ import io
 import fitz
 import base64
 import mimetypes
-import requests
+import httpx
+import aiofiles
 from pathlib import Path
-from urllib3.exceptions import InsecureRequestWarning
-from openai import OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv, find_dotenv
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 load_dotenv(find_dotenv())
 
 # ================= 环境变量配置 =================
@@ -27,12 +26,58 @@ PARSE_RESULT_DIR.mkdir(parents=True, exist_ok=True)
 
 # ================= 运行日志配置 —— 直接复用DocumentParser =================
 logger = logging.getLogger("DocumentParser")
-def ensure_logger_handler():  # 仅为"单独运行本文件"时提供控制台输出兜底，不影响被 parse_file 导入时的日志合并
+def ensure_logger_handler():
     if not logger.handlers:
         _handler = logging.StreamHandler()
         _handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         logger.addHandler(_handler)
         logger.setLevel(logging.INFO)
+
+# ================= 模块级连接池（进程启动时惰性创建，进程退出时关闭） =================
+# MinerU API 共用一个 httpx.AsyncClient（TCP 连接复用，避免每次握手）
+# VLM/LLM 共用一个 AsyncOpenAI（内部自带 httpx.AsyncClient 连接池）
+# 信号量控制业务并发上限（避免 MinerU/API 限流），与连接池正交
+
+_mineru_http_client: httpx.AsyncClient | None = None
+_vlm_async_client: AsyncOpenAI | None = None
+# 并发上限：同时对 MinerU 提交的任务数（MinerU 无明确并发限制，但每日 1000 页优先级额度）
+_mineru_sem = asyncio.Semaphore(5)
+# VLM 并发上限（阿里云 API 限流保护）
+_vlm_sem = asyncio.Semaphore(5)
+
+
+async def _get_mineru_http() -> httpx.AsyncClient:
+    global _mineru_http_client
+    if _mineru_http_client is None or _mineru_http_client.is_closed:
+        _mineru_http_client = httpx.AsyncClient(
+            verify=False,
+            timeout=httpx.Timeout(120.0, connect=30.0),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _mineru_http_client
+
+
+async def _get_vlm_async_client() -> AsyncOpenAI:
+    global _vlm_async_client
+    if _vlm_async_client is None:
+        access_code = os.getenv("ACCESSCODE", "")
+        base_url = os.getenv("BASE_URL", "")
+        _vlm_async_client = AsyncOpenAI(
+            api_key=access_code,
+            base_url=base_url,
+            http_client=httpx.AsyncClient(verify=False, timeout=httpx.Timeout(180.0, connect=30.0)),
+        )
+    return _vlm_async_client
+
+
+async def _close_clients():
+    global _mineru_http_client, _vlm_async_client
+    if _mineru_http_client and not _mineru_http_client.is_closed:
+        await _mineru_http_client.aclose()
+    _mineru_http_client = None
+    if _vlm_async_client:
+        await _vlm_async_client.close()
+    _vlm_async_client = None
 
 class MinerUProcessor:
     def __init__(
@@ -118,16 +163,19 @@ class MinerUProcessor:
         return page_files
 
     # =================== 2. 调用 MinerU 官方云 API v4 解析单页PDF ======================
-    def call_mineru(self, pdf_path: str):
+    async def call_mineru(self, pdf_path: str):
         """调用 MinerU 官方云 API v4 解析单页 PDF，返回与旧内网接口兼容的结构：
         {"results": {<file_name>: {"md_content":..., "content_list":..., "middle_json":..., "images":{}}}}
 
         流程：提交 batch → PUT 上传文件 → 轮询结果 → 下载 zip → 解压组装
+        全异步：httpx.AsyncClient + asyncio.sleep
         """
         api_base = self.mineru_api_base
         headers = {"Authorization": f"Bearer {self.mineru_token}", "Content-Type": "application/json"}
         file_name = Path(pdf_path).name
         data_id = Path(pdf_path).stem
+
+        http = await _get_mineru_http()
 
         # ---- 步骤1：提交 batch，获取上传 URL ----
         submit_body = {
@@ -138,8 +186,9 @@ class MinerUProcessor:
             "model_version": "pipeline",
             "files": [{"name": file_name, "is_ocr": True, "data_id": data_id}],
         }
-        resp = requests.post(f"{api_base}/api/v4/file-urls/batch", headers=headers, json=submit_body, timeout=60)
-        resp.raise_for_status()
+        async with _mineru_sem:
+            resp = await http.post(f"{api_base}/api/v4/file-urls/batch", headers=headers, json=submit_body, timeout=60)
+            resp.raise_for_status()
         resp_data = resp.json()
         if resp_data.get("code") != 0:
             raise RuntimeError(f"[MinerU] 提交 batch 失败: {resp_data}")
@@ -148,9 +197,9 @@ class MinerUProcessor:
         logger.info(f"[MinerU] batch_id={batch_id}, 上传文件: {file_name}")
 
         # ---- 步骤2：PUT 上传文件字节到上传 URL（不带 Content-Type header）----
-        with open(pdf_path, "rb") as f:
-            file_bytes = f.read()
-        put_resp = requests.put(upload_url, data=file_bytes, timeout=120)
+        async with aiofiles.open(pdf_path, "rb") as f:
+            file_bytes = await f.read()
+        put_resp = await http.put(upload_url, content=file_bytes, timeout=120)
         put_resp.raise_for_status()
         logger.info(f"[MinerU] 文件已上传: {file_name} ({len(file_bytes)} bytes)")
 
@@ -160,8 +209,8 @@ class MinerUProcessor:
         poll_interval = 3
         full_zip_url = None
         for i in range(max_polls):
-            time.sleep(poll_interval)
-            poll_resp = requests.get(f"{api_base}/api/v4/extract-results/batch/{batch_id}", headers=poll_headers, timeout=60)
+            await asyncio.sleep(poll_interval)
+            poll_resp = await http.get(f"{api_base}/api/v4/extract-results/batch/{batch_id}", headers=poll_headers, timeout=60)
             poll_resp.raise_for_status()
             poll_data = poll_resp.json()
             if poll_data.get("code") != 0:
@@ -181,7 +230,7 @@ class MinerUProcessor:
             raise RuntimeError(f"[MinerU] 轮询超时（{max_polls * poll_interval}s），batch_id={batch_id}")
 
         # ---- 步骤4：下载 zip 并解压 ----
-        zip_resp = requests.get(full_zip_url, timeout=120)
+        zip_resp = await http.get(full_zip_url, timeout=120)
         zip_resp.raise_for_status()
         zip_file = zipfile.ZipFile(io.BytesIO(zip_resp.content))
         logger.info(f"[MinerU] zip 已下载，包含: {zip_file.namelist()}")
@@ -485,14 +534,14 @@ class MinerUProcessor:
         return is_image_only, debug_info
 
     # ======================== 5. 在正式处理单页之前，先准备单页各项属性的信息 =================================
-    def prepare_one_page_before_process(self, page_info: dict):
+    async def prepare_one_page_before_process(self, page_info: dict):
         page_no = page_info["page_no"]
         pdf_path = page_info["pdf_path"]
 
-        result = self.call_mineru(pdf_path)
-        raw_save_path = self.page_result_dir / f"page_{page_no:04d}_mineru.json"  # 把页面的原始内容存入文件
-        with open(raw_save_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+        result = await self.call_mineru(pdf_path)
+        raw_save_path = self.page_result_dir / f"page_{page_no:04d}_mineru.json"
+        async with aiofiles.open(raw_save_path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(result, ensure_ascii=False, indent=2))
         doc_data = self.extract_doc_data_from_mineru_result(result)
         md_content = doc_data["md_content"]
         content_list = doc_data["content_list"]
@@ -507,8 +556,8 @@ class MinerUProcessor:
         )
 
         debug_save_path = self.page_result_dir / f"page_{page_no:04d}_debug.json"
-        with open(debug_save_path, "w", encoding="utf-8") as f:
-            json.dump(debug_info, f, ensure_ascii=False, indent=2)
+        async with aiofiles.open(debug_save_path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(debug_info, ensure_ascii=False, indent=2))
 
         logger.debug(
             f"[MinerU] 第 {page_no} 页预判断 "
@@ -564,7 +613,7 @@ class MinerUProcessor:
             return "webp"
         return "bin"
 
-    def save_images_from_result(self, images_dict, md_refs, page_no: int):  # 将 MinerU 返回的 images 字典落盘，并建立：markdown 图片引用 -> 本地文件路径
+    async def save_images_from_result(self, images_dict, md_refs, page_no: int):  # 将 MinerU 返回的 images 字典落盘，并建立：markdown 图片引用 -> 本地文件路径
         saved_local_paths = []
         ref_to_local = {}
 
@@ -591,8 +640,8 @@ class MinerUProcessor:
                 key_name = f"{key_name}.{ext}"
             out_name = f"page_{page_no:04d}_{key_name}"  # 图片文件名
             out_path = self.img_dir / out_name
-            with open(out_path, "wb") as f:
-                f.write(img_bytes)
+            async with aiofiles.open(out_path, "wb") as f:
+                await f.write(img_bytes)
             # middle_json 的 image_path/锚点引用是原始文件名(如 501fbc....jpg)，这里记录其对应的落盘路径，供 build_page_anchors 用统一落盘路径把"达标插图"正确写进 anchors.json。
             self._basename_to_local[Path(str(key)).name] = str(out_path)
             saved_local_paths.append(
@@ -621,7 +670,7 @@ class MinerUProcessor:
         return ref_to_local
 
     # ====================== 8. 调用 VLM 进行解析 ===================================
-    def call_vlm_describe_image(
+    async def call_vlm_describe_image(
         self,
         image_path: str,
         page_no: int | None = None,
@@ -630,8 +679,9 @@ class MinerUProcessor:
         ext = Path(image_path).suffix.lower().lstrip(".") or "png"
         mime = mimetypes.types_map.get(f".{ext}", f"image/{ext}")
 
-        with open(image_path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
+        async with aiofiles.open(image_path, "rb") as f:
+            raw_bytes = await f.read()
+        b64 = base64.b64encode(raw_bytes).decode("utf-8")
 
         if whole_page:
             prompt = (
@@ -656,16 +706,17 @@ class MinerUProcessor:
             )
 
         
-        client = OpenAI(api_key=self.access_code, base_url=self.base_url, timeout=180)
-        response = client.chat.completions.create(
-            model=self.vlm_model,
-            temperature=0.1,
-            messages=[{"role": "user", 
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
-                ]}],
-        )
+        client = await _get_vlm_async_client()
+        async with _vlm_sem:
+            response = await client.chat.completions.create(
+                model=self.vlm_model,
+                temperature=0.1,
+                messages=[{"role": "user", 
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+                    ]}],
+            )
         try:
             content = response.choices[0].message.content
             if isinstance(content, list):
@@ -1150,7 +1201,7 @@ class MinerUProcessor:
 
 
     # ====================== 12. 正式处理单页 ===================================
-    def process_one_page(self, page_context: dict):
+    async def process_one_page(self, page_context: dict):
         page_no = page_context["page_no"]
         pdf_path = page_context["pdf_path"]
 
@@ -1174,7 +1225,7 @@ class MinerUProcessor:
 
                 logger.debug(f"[MinerU] 第 {page_no} 页已渲染整页图片：{render_img_path}")
 
-                vlm_md = self.call_vlm_describe_image(
+                vlm_md = await self.call_vlm_describe_image(
                     render_img_path,
                     page_no=page_no,
                     whole_page=True,
@@ -1202,8 +1253,8 @@ class MinerUProcessor:
                     "image_paths": [render_img_path],
                 }]
 
-            with open(page_md_path, "w", encoding="utf-8") as f:
-                f.write(final_md)
+            async with aiofiles.open(page_md_path, "w", encoding="utf-8") as f:
+                await f.write(final_md)
 
             return {
                 "page_no": page_no,
@@ -1220,7 +1271,7 @@ class MinerUProcessor:
         # 2. 如果不是 image_only：使用 MinerU md_content，并对内部图片做 VLM 描述回填
         md_refs = self.extract_image_refs(md_content)
 
-        ref_to_local = self.save_images_from_result(
+        ref_to_local = await self.save_images_from_result(
             images_dict,
             md_refs,
             page_no=page_no,
@@ -1231,23 +1282,24 @@ class MinerUProcessor:
         descriptions = {}
         self._meaning_by_path = {}  # 每次处理一页时清空，仅记录本页图片的意义判断
 
-        for ref, local_img_path in ref_to_local.items():
+        async def _describe_one(ref: str, local_img_path: str):
             try:
                 logger.debug(f"[MinerU] 第 {page_no} 页图片描述中：{local_img_path}")
-
-                desc, meaningful = self.call_vlm_describe_image(
+                desc, meaningful = await self.call_vlm_describe_image(
                     local_img_path,
                     page_no=page_no,
                     whole_page=False,
                 )
-
-                descriptions[ref] = desc
-                self._meaning_by_path[local_img_path] = meaningful
-
+                return ref, desc, meaningful
             except Exception as e:
                 logger.warning(f"[MinerU] 第 {page_no} 页图片描述失败：ref={ref}, error={e}")
-                descriptions[ref] = "该图片描述生成失败。"
-                self._meaning_by_path[local_img_path] = True  # 失败时保守保留
+                return ref, "该图片描述生成失败。", True
+
+        tasks = [_describe_one(ref, path) for ref, path in ref_to_local.items()]
+        results = await asyncio.gather(*tasks)
+        for ref, desc, meaningful in results:
+            descriptions[ref] = desc
+            self._meaning_by_path[ref_to_local[ref]] = meaningful
 
         # 基于 middle_json 构建本页"文字↔插图"锚点（含过滤记录）
         # 说明：须在 _meaning_by_path 回填之后调用，滤波判断才会包含 AI 意义。
@@ -1267,8 +1319,8 @@ class MinerUProcessor:
         final_md = self.normalize_md_text(replaced_md)
 
         page_md_path = self.page_result_dir / f"page_{page_no:04d}_final.md"
-        with open(page_md_path, "w", encoding="utf-8") as f:
-            f.write(final_md)
+        async with aiofiles.open(page_md_path, "w", encoding="utf-8") as f:
+            await f.write(final_md)
 
         return {
             "page_no": page_no,
@@ -1340,92 +1392,69 @@ class MinerUProcessor:
 
         return final_data
 
-    def write_anchors_json(self, merged):  # 把合并结果的插图锚点/过滤记录落盘为 anchors.json（与 merged.md 平行）
-        """把 merged(merge_page_results 的产物) 中的插图锚点与过滤记录写出 anchors.json，
-        供入库(child_chunk 填 image_url)与检索使用。返回 anchors 路径。
-
-        注意：入库走 parse_file._parse_pdf_pipeline（不用 process()），那里也会调用本方法，
-        保证入库时磁盘上同样有 anchors.json 可供读取。
-        """
+    async def write_anchors_json(self, merged):  # 把合并结果的插图锚点/过滤记录落盘为 anchors.json
         anchors_path = self.doc_dir / "anchors.json"
-        with open(anchors_path, "w", encoding="utf-8") as f:
-            json.dump(
+        async with aiofiles.open(anchors_path, "w", encoding="utf-8") as f:
+            await f.write(json.dumps(
                 {
                     "anchors": merged.get("anchors", []),
                     "filters": merged.get("filters", []),
                 },
-                f,
                 ensure_ascii=False,
                 indent=2,
-            )
+            ))
         logger.info(
             f"[MinerU] 插图锚点已输出到：{anchors_path} "
             f"(锚点 {len(merged.get('anchors', []))} 条，过滤记录 {len(merged.get('filters', []))} 条)"
         )
         return anchors_path
 
-    def write_merged_md(self, text: str) -> Path:
-        """把整篇 Markdown 文本落盘为 merged.md（与 anchors.json 平行），
-        供前端"查看/编辑解析结果"读取。text 为空时也写（便于编辑后空内容占位）。
-        """
+    async def write_merged_md(self, text: str) -> Path:
         merged_md_path = self.doc_dir / "merged.md"
-        with open(merged_md_path, "w", encoding="utf-8") as f:
-            f.write(text or "")
+        async with aiofiles.open(merged_md_path, "w", encoding="utf-8") as f:
+            await f.write(text or "")
         logger.info(f"[MinerU] 整篇 Markdown 已输出到：{merged_md_path}")
         return merged_md_path
 
     # ======================= 14. 主流程 ==================================
-    def process(self):
+    async def process(self):
         logger.info("[MinerU] ========== 第一步：逐页拆 PDF ==========")
         page_files = self.split_pdf_to_pages()
         logger.info(f"[MinerU] 共拆出 {len(page_files)} 页")
 
         logger.info("[MinerU] ========== 第二步：逐页 MinerU 预判断 + VLM/MinerU 分流 ==========")
 
-        all_page_results = []
-
-        for page_info in page_files:
+        async def _process_page(page_info):
             page_no = page_info["page_no"]
             logger.debug(f"[MinerU] 正在处理第 {page_no}/{len(page_files)} 页")
-
             try:
-                # 1. 正式处理前先准备 page_context
-                # 这里已经包含 is_image_only 字段
-                page_context = self.prepare_one_page_before_process(page_info)
-
-                # 2. 根据 page_context["is_image_only"] 决定走 VLM 还是 MinerU
-                one_page_result = self.process_one_page(page_context)
-
-                all_page_results.append(one_page_result)
-
+                page_context = await self.prepare_one_page_before_process(page_info)
+                one_page_result = await self.process_one_page(page_context)
+                return one_page_result
             except Exception as e:
                 logger.error(f"[MinerU] 第 {page_no} 页处理失败：{e}")
+                return {
+                    "page_no": page_no,
+                    "is_image_only": False,
+                    "debug_info": {"error": str(e)},
+                    "md_content": "",
+                    "content_list": [],
+                    "middle_json": None,
+                    "image_desc_map": {},
+                    "anchors": [],
+                    "filters": [],
+                }
 
-                all_page_results.append(
-                    {
-                        "page_no": page_no,
-                        "is_image_only": False,
-                        "debug_info": {
-                            "error": str(e),
-                        },
-                        "md_content": "",
-                        "content_list": [],
-                        "middle_json": None,
-                        "image_desc_map": {},
-                        "anchors": [],
-                        "filters": [],
-                    }
-                )
+        all_page_results = await asyncio.gather(*[_process_page(pf) for pf in page_files])
 
         logger.info("[MinerU] ========== 第三步：按页顺序拼接 ==========")
         merged = self.merge_page_results(all_page_results)
         merged_md_path = self.doc_dir / "merged.md"
-        with open(merged_md_path, "w", encoding="utf-8") as f:
-            f.write(merged["md_content"])
+        async with aiofiles.open(merged_md_path, "w", encoding="utf-8") as f:
+            await f.write(merged["md_content"])
         logger.info(f"[MinerU] 拼接完成，整篇 Markdown 已输出到：{merged_md_path}")
 
-        # 输出与 merged.md 平行的插图锚点文件（含锚点清单与过滤记录），供检索返回图片/入库使用
-        self.write_anchors_json(merged)
+        await self.write_anchors_json(merged)
 
         return merged
 
@@ -1435,7 +1464,7 @@ class MinerUProcessor:
 # =========================================================
 
 def main():
-    ensure_logger_handler()  # 独立运行本文件时补充控制台日志兜底；被 parse_file 导入时该 logger 已有 handler，不会重复添加
+    ensure_logger_handler()
     PDF_PATH = "/root/iron/Abort_MyAgent_Doc/data/test_data/myagent_file/汇算清缴操作指南.pdf"
 
     processor = MinerUProcessor(
@@ -1443,7 +1472,7 @@ def main():
         output_dir=str(PARSE_RESULT_DIR),
     )
 
-    processor.process()
+    asyncio.run(processor.process())
 
 
 if __name__ == "__main__":

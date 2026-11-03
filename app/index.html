@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>象劳厮</title>
+  <title>小象老师</title>
   <link rel="icon" type="image/svg+xml" href="/front_end_assets/Avatar.svg">
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -33,7 +33,7 @@
       font-style: normal;
     }
     /* ═══════════════════════════════════════════════════════
-       象劳厮 — AI Workspace Design System
+       小象老师 — AI Workspace Design System
        绿色清新系 · Gemini-style sidebar + chat layout
        ═══════════════════════════════════════════════════════ */
 
@@ -950,7 +950,7 @@
       <!-- Sidebar header -->
       <div class="sidebar-header">
         <div class="sidebar-logo" onclick="switchPage('chat')">
-          <img src="/front_end_assets/Avatar.svg" class="sidebar-logo-icon" alt="象劳厮" style="width:36px;height:36px;border-radius:10px;object-fit:contain" />
+          <img src="/front_end_assets/Avatar.svg" class="sidebar-logo-icon" alt="小象老师" style="width:36px;height:36px;border-radius:10px;object-fit:contain" />
           <div class="sidebar-logo-text">我的工作区</div>
         </div>
       </div>
@@ -998,7 +998,7 @@
         <div class="page-panel" id="panel-home">
           <div class="home-bg">
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:calc(100vh - 64px);position:relative;z-index:1">
-              <div style="font-size:48px;font-weight:var(--fw-b);color:var(--c-text);letter-spacing:-0.03em">象劳厮 AI</div>
+              <div style="font-size:48px;font-weight:var(--fw-b);color:var(--c-text);letter-spacing:-0.03em">小象老师</div>
               <div style="font-size:20px;color:var(--c-text-2);margin-top:14px">知识驱动的问答助手</div>
               <div style="display:flex;gap:20px;margin-top:60px">
                 <div class="step-section" style="cursor:pointer;min-width:200px;text-align:center" onclick="switchPage('chat')">
@@ -1314,8 +1314,8 @@
           <div class="chat-shell">
             <div class="chat-messages" id="chatMessages" role="log" aria-live="polite">
               <div class="chat-empty" id="chatEmpty">
-                <img src="/front_end_assets/Avatar.svg" class="chat-empty__icon" alt="象劳厮" style="width:56px;height:56px;border-radius:14px;object-fit:contain" />
-                <div class="chat-empty__title">象劳厮</div>
+                <img src="/front_end_assets/Avatar.svg" class="chat-empty__icon" alt="小象老师" style="width:56px;height:56px;border-radius:14px;object-fit:contain" />
+                <div class="chat-empty__title">小象老师</div>
                 <div class="chat-empty__desc">知识库已就绪，请向我提问任何相关问题。</div>
               </div>
             </div>
@@ -1335,7 +1335,7 @@
                   </button>
                 </div>
               </div>
-              <p class="chat-input-hint">象劳厮可能会生成不准确的信息，请核查重要内容</p>
+              <p class="chat-input-hint">小象老师也会生成不准确的信息，请核查重要内容</p>
             </div>
           </div>
         </div>
@@ -1561,7 +1561,7 @@
     const titleEl = document.getElementById('topbarTitle');
     if (titleEl) {
       const icon = icons[pageId];
-      const label = titles[pageId] || '象劳厮';
+      const label = titles[pageId] || '小象老师';
       titleEl.innerHTML = icon ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;vertical-align:-3px">${icon}</svg>${label}` : label;
     }
 
@@ -2454,11 +2454,11 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     d.dataset.turn = o.turnCount != null ? o.turnCount : '';
     d.dataset.judgement = o.judgement || '';
     d.dataset.text = o.text || '';
-    d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="象劳厮" />
+    d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="小象老师" />
       <div class="chat-msg__body">
         <div class="chat-msg__header">
-          <span class="chat-msg__name">象劳厮</span>
-          <span class="chat-msg__badge">深度回答</span>
+          <span class="chat-msg__name">小象老师</span>
+          <span class="chat-msg__badge">深度思考</span>
         </div>
         <div class="chat-msg__bubble">${html}</div>
         <div class="chat-msg__actions">
@@ -2481,10 +2481,10 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   }
   function createStreamingMsg() {
     const d = document.createElement('div'); d.className = 'chat-msg chat-msg--ai';
-    d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="象劳厮" />
+    d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="小象老师" />
       <div class="chat-msg__body">
         <div class="chat-msg__header">
-          <span class="chat-msg__name">象劳厮</span>
+          <span class="chat-msg__name">小象老师</span>
         </div>
         <div class="chat-msg__bubble" id="streamingContent">
           <span class="typing-indicator"><span></span><span></span><span></span></span>

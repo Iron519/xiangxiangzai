@@ -151,13 +151,9 @@ async def rewrite_chunks_with_coref(
 
     logger.info(f"[Rewrite] 开始重写: {len(tasks)}/{total} 个子块（跳过 {skip_count} 个）")
 
-    # 并发执行，带进度日志
-    results = []
-    for i, coro in enumerate(tasks):
-        result = await coro
-        results.append(result)
-        if (i + 1) % 20 == 0:
-            logger.info(f"[Rewrite] 进度: {i + 1}/{len(tasks)}")
+    # 并发执行所有重写任务
+    results = await asyncio.gather(*tasks)
+    logger.info(f"[Rewrite] {len(tasks)} 个子块重写完成")
 
     # 写回 child_content + 更新 text_hash
     from hashlib import sha256

@@ -90,10 +90,12 @@ UPLOAD_STATUS_EMBEDDING = "embedding"
 UPLOAD_STATUS_INGESTING = "ingesting"
 UPLOAD_STATUS_COMPLETED = "completed"
 UPLOAD_STATUS_FAILED    = "failed"
-UPLOAD_STATUS_QUEUED     = "queued"      # 排队中：已有活跃任务，等待串行处理
-UPLOAD_STATUS_CANCELLED  = "cancelled"   # 已中止：用户主动取消，阶段间检查到后退出
+UPLOAD_STATUS_CANCELLED  = "cancelled"
 
-# 进行中状态集合（用于单用户单任务校验）
+# 并发上限：同时处理的解析任务数（MinerU API 无明确并发限制，embedding batch≤20）
+_upload_sem = asyncio.Semaphore(3)
+
+# 进行中状态集合
 _UPLOAD_ACTIVE_STATUSES = (
     UPLOAD_STATUS_SAVING,
     UPLOAD_STATUS_PARSING,
@@ -101,9 +103,6 @@ _UPLOAD_ACTIVE_STATUSES = (
     UPLOAD_STATUS_EMBEDDING,
     UPLOAD_STATUS_INGESTING,
 )
-
-# "占用队列"的状态集合：进行中 + 排队中。新上传若发现已有这些状态的任务，则入队排队而非立即启动
-_UPLOAD_BUSY_STATUSES = _UPLOAD_ACTIVE_STATUSES + (UPLOAD_STATUS_QUEUED,)
 
 UPLOAD_TASKS_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
 # 可写入任务表的字段白名单
@@ -125,67 +124,14 @@ def _task_conn():
     )
 
 
-def _has_active_task(uid: str, statuses: tuple[str, ...] = _UPLOAD_ACTIVE_STATUSES) -> bool:
-    """检查该 uid 是否已有指定状态集合内的上传任务。
-
-    默认只看“进行中”状态；传入 _UPLOAD_BUSY_STATUSES 可同时包含排队中。
-    """
-    if not uid:
-        return False
-    try:
-        with _task_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT 1 FROM {UPLOAD_TASKS_TABLE} "
-                    f"WHERE uid = %s AND status = ANY(%s) LIMIT 1",
-                    (uid, list(statuses)),
-                )
-                return cur.fetchone() is not None
-    except Exception as e:
-        logger.warning(f"[UploadTask] 检查活跃任务失败: {e}")
-        return False
+def _has_active_task(uid: str, statuses: tuple[str, ...] = ()) -> bool:
+    """并发模式下不再限制单用户单任务，直接返回 False。"""
+    return False
 
 
 def _claim_next_queued_task(uid: str) -> dict[str, Any] | None:
-    """原子地认领最早的 queued 任务：SELECT 并 UPDATE 为 saving，返回任务信息。
-
-    使用 FOR UPDATE SKIP LOCKED，多 worker 并发时各自跳过对方锁住的行，
-    不会重复启动同一个排队任务（PG 处理任务队列的标准做法）。
-    """
-    try:
-        with _task_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    WITH claimed AS (
-                        SELECT task_id, save_path, original_name, expire_time, if_show
-                        FROM {UPLOAD_TASKS_TABLE}
-                        WHERE uid = %s AND status = %s
-                        ORDER BY created_at ASC
-                        LIMIT 1
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    UPDATE {UPLOAD_TASKS_TABLE} t
-                    SET status = %s, updated_at = %s
-                    FROM claimed
-                    WHERE t.task_id = claimed.task_id
-                    RETURNING t.task_id, t.save_path, t.original_name, t.expire_time, t.if_show
-                    """,
-                    (uid, UPLOAD_STATUS_QUEUED, UPLOAD_STATUS_SAVING,
-                     datetime.now(timezone.utc).isoformat()),
-                )
-                row = cur.fetchone()
-            conn.commit()
-            if not row:
-                return None
-            # expire_time 是 datetime 对象，转 ISO 字符串供下游统一处理
-            expire_dt = row[3]
-            expire_iso = expire_dt.isoformat() if expire_dt else None
-            return {"task_id": row[0], "save_path": row[1], "original_name": row[2],
-                    "expire_time": expire_iso, "if_show": bool(row[4])}
-    except Exception as e:
-        logger.error(f"[UploadTask] 认领排队任务失败: {e}")
-        return None
+    """并发模式下不再使用串行排队，返回 None。"""
+    return None
 
 
 def _create_task(task_id: str, uid: str, original_name: str, save_name: str,
@@ -217,47 +163,24 @@ def _create_task(task_id: str, uid: str, original_name: str, save_name: str,
 
 
 async def recover_queued_tasks() -> None:
-    """进程启动时恢复遗留的排队任务。
-
-    策略：
-    1. 把所有 uid 下仍处于“处理中”（saving/parsing/chunking/embedding/ingesting）
-       的任务视为上次崩溃遗留的僵尸，标记为 failed（附 error 说明）。
-       —— 这些状态在进程退出时不可能正常保留，重启后必须人工/自动处理。
-    2. 对每个存在 queued 任务的 uid，触发最早的 queued 任务；它结束后会
-       通过 _background_process 的 finally 链式推进后续。
-
-    注意：清理僵尸的逻辑适用于单 worker 部署（python app/app.py）。多 worker
-    下每个 worker 启动都会执行清理，可能误将其他 worker 正在处理的任务标
-    记为 failed。多 worker 场景需改为“仅清理 updated_at 超过 N 分钟的任务”。
-    _claim_next_queued_task 的 FOR UPDATE SKIP LOCKED 保证 queued 不会被重复认领。
-    """
+    """进程启动时清理上次崩溃遗留的中断任务。"""
     try:
         with _task_conn() as conn:
             with conn.cursor() as cur:
-                # 1. 清理僵尸：处理中 → failed
                 cur.execute(
                     f"UPDATE {UPLOAD_TASKS_TABLE} "
                     f"SET status = %s, error = %s, updated_at = %s "
-                    f"WHERE status = ANY(%s)",
+                    f"WHERE status NOT IN (%s, %s, %s)",
                     (UPLOAD_STATUS_FAILED, "进程重启，任务中断",
                      datetime.now(timezone.utc).isoformat(),
-                     list(_UPLOAD_ACTIVE_STATUSES)),
+                     UPLOAD_STATUS_COMPLETED, UPLOAD_STATUS_FAILED, UPLOAD_STATUS_CANCELLED),
                 )
                 cleaned = cur.rowcount
-                # 2. 找出有 queued 任务的 uid 列表
-                cur.execute(
-                    f"SELECT DISTINCT uid FROM {UPLOAD_TASKS_TABLE} WHERE status = %s",
-                    (UPLOAD_STATUS_QUEUED,),
-                )
-                uids = [r[0] for r in cur.fetchall()]
             conn.commit()
         if cleaned:
             logger.info(f"[UploadTask] 启动清理 {cleaned} 个中断任务（标记为 failed）")
-        for uid in uids:
-            logger.info(f"[UploadTask] 启动恢复 uid={uid} 的排队任务")
-            await _trigger_next_queued(uid)
     except Exception as e:
-        logger.error(f"[UploadTask] 恢复排队任务失败: {e}")
+        logger.error(f"[UploadTask] 恢复任务失败: {e}")
 
 
 def _set_task_status(task_id: str, status: str, **kwargs) -> None:
@@ -391,174 +314,156 @@ def _parse_timestamp(value: str | None) -> datetime | None:
 
 
 async def _trigger_next_queued(uid: str) -> None:
-    """当前任务结束后，启动下一个 queued 任务（同一 uid 内串行推进）。"""
-    next_task = _claim_next_queued_task(uid)
-    if not next_task:
-        return
-    logger.info(f"[UploadTask] 触发排队任务: {next_task['task_id']} ({next_task['original_name']})")
-    asyncio.create_task(_background_process(
-        next_task["task_id"], next_task["save_path"], next_task["original_name"],
-        uid=uid, expire_time=next_task.get("expire_time"), if_show=next_task.get("if_show", True)
-    ))
+    """并发模式下不再使用串行排队，空操作。"""
+    pass
 
 
 async def _background_process(task_id: str, save_path: str, original_name: str, uid: str = "anonymous",
                               expire_time: Optional[str] = None,
                               if_show: bool = True) -> None:
-    """后台协程：解析 → 切块 → 向量化 → 入库。所有同步阻塞部分用 to_thread 包裹。
+    """后台协程：解析 → 切块 → 向量化 → 入库。全异步，信号量控制并发上限。
 
     expire_time: 可选过期时间（ISO 字符串），None 表示永久有效。透传给切块写入 PG。
     if_show: 该文件图片是否可展示（文件级开关），冗余到每个入库切块。
-    处理结束后（无论成功或失败）在 finally 中触发同一 uid 的下一个排队任务，保证队列串行推进。
     """
     embedding_model = None
     try:
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
-        logger.info(f"[Task {task_id}] 开始解析文件: {save_path}")
-        parsed_text = await asyncio.to_thread(DocumentParser().parse_file, save_path)
+        async with _upload_sem:
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
+            logger.info(f"[Task {task_id}] 开始解析文件: {save_path}")
+            parsed_text = await DocumentParser().parse_file(save_path)
 
-        # 阶段间检查点：解析完成后、切块前，若已被标记中止则退出
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_CHUNKING)
-        logger.info(f"[Task {task_id}] 开始生成父级分块")
-        stat_info = os.stat(save_path)
-        father_chunks = await asyncio.to_thread(
-            chunk_markdown_text,
-            text=parsed_text,
-            file_path=save_path,
-            upload_time=datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
-            update_time=datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
-            expire_time=expire_time,
-            if_show=if_show,
-        )
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_CHUNKING,
-            **{"father_chunks": len(father_chunks)},
-        )
-        logger.info(f"[Task {task_id}] 父级分块完成，数量: {len(father_chunks)}")
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_CHUNKING)
+            logger.info(f"[Task {task_id}] 开始生成父级分块")
+            stat_info = os.stat(save_path)
+            father_chunks = await asyncio.to_thread(
+                chunk_markdown_text,
+                text=parsed_text,
+                file_path=save_path,
+                upload_time=datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
+                update_time=datetime.fromtimestamp(stat_info.st_mtime).isoformat(),
+                expire_time=expire_time,
+                if_show=if_show,
+            )
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_CHUNKING,
+                **{"father_chunks": len(father_chunks)},
+            )
+            logger.info(f"[Task {task_id}] 父级分块完成，数量: {len(father_chunks)}")
 
-        # 阶段间检查点：切块完成后、向量化前
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_EMBEDDING)
-        logger.info(f"[Task {task_id}] 开始向量化")
-        embedding_model = EmbeddingModel()
-        semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
-        # 依据 anchors.json 按文本匹配给"图片对应的文字"的 child_chunk 填 related_image_url(可渲染 URL)
-        await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path)
-        # 指代消解+重写：让 child_content 脱离上下文也能独立理解，提升检索精度
-        await rewrite_chunks_with_coref(semantic_chunks)
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
-            **{"semantic_chunks": len(semantic_chunks)},
-        )
-        logger.info(f"[Task {task_id}] 语义分块完成，数量: {len(semantic_chunks)}")
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_EMBEDDING)
+            logger.info(f"[Task {task_id}] 开始向量化")
+            embedding_model = EmbeddingModel()
+            semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
+            await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path)
+            await rewrite_chunks_with_coref(semantic_chunks)
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
+                **{"semantic_chunks": len(semantic_chunks)},
+            )
+            logger.info(f"[Task {task_id}] 语义分块完成，数量: {len(semantic_chunks)}")
 
-        # 阶段间检查点：向量化完成后、入库前（入库前最后机会，避免半截脏数据）
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
-        logger.info(f"[Task {task_id}] 开始写入 PG表: {os.getenv('PG_MYAGENT_KB_TABLE')}")
-        summary = await asyncio.to_thread(
-            store_semantic_chunks,
-            semantic_chunks,
-            schema="public",
-            table=os.getenv("PG_MYAGENT_KB_TABLE"),
-            upsert_key=("file_name", "text_hash"),  # 内容级去重
-        )
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
+            logger.info(f"[Task {task_id}] 开始写入 PG表: {os.getenv('PG_MYAGENT_KB_TABLE')}")
+            summary = await asyncio.to_thread(
+                store_semantic_chunks,
+                semantic_chunks,
+                schema="public",
+                table=os.getenv("PG_MYAGENT_KB_TABLE"),
+                upsert_key=("file_name", "text_hash"),
+            )
 
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_COMPLETED,
-            **{
-                "chunk_count": summary.get("chunk_count", len(semantic_chunks)),
-                "inserted": summary.get("inserted", 0),
-                "updated": summary.get("updated", 0),
-                "father_chunks": len(father_chunks),
-            },
-        )
-        logger.info(f"[Task {task_id}] 入库完成！共 {summary.get('chunk_count', 0)} 个切片")
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_COMPLETED,
+                **{
+                    "chunk_count": summary.get("chunk_count", len(semantic_chunks)),
+                    "inserted": summary.get("inserted", 0),
+                    "updated": summary.get("updated", 0),
+                    "father_chunks": len(father_chunks),
+                },
+            )
+            logger.info(f"[Task {task_id}] 入库完成！共 {summary.get('chunk_count', 0)} 个切片")
     except TaskCancelled:
         logger.info(f"[Task {task_id}] 任务已被中止: {original_name}")
-        # cancelled 状态已由 cancel 接口标记，此处不再覆盖；残留磁盘文件由用户在前端删除
     except Exception as e:
         logger.exception(f"[Task {task_id}] 处理失败: {original_name}")
         await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_FAILED, **{"error": str(e)})
     finally:
         if embedding_model is not None:
             await embedding_model.aclose()
-        # 触发同一 uid 的下一个排队任务（成功/失败/中止都推进，避免队列卡死）
-        await _trigger_next_queued(uid)
 
 
 async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                               original_name: str, uid: str = "anonymous", if_show: bool = True) -> None:
-    """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。
-
-    if_show: 沿用该文件现有设置（文件级图片展示开关）。
-    """
+    """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。"""
     embedding_model = None
     try:
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
-        merged_text = _read_merged_md(save_path)
-        if not merged_text.strip():
-            raise RuntimeError("merged.md 为空，无法重新切片。请先在编辑页输入内容并保存。")
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING,
-                                **{"original_name": original_name})
+        async with _upload_sem:
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
+            merged_text = _read_merged_md(save_path)
+            if not merged_text.strip():
+                raise RuntimeError("merged.md 为空，无法重新切片。请先在编辑页输入内容并保存。")
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING,
+                                    **{"original_name": original_name})
 
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_CHUNKING)
-        stat_info = os.stat(save_path)
-        # 沿用该文件现有 if_show 设置并透传
-        father_chunks = await asyncio.to_thread(
-            chunk_markdown_text,
-            text=merged_text,
-            file_path=save_path,
-            upload_time=datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
-            update_time=datetime.now(timezone.utc).isoformat(),
-            if_show=if_show,
-        )
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_CHUNKING,
-            **{"father_chunks": len(father_chunks)},
-        )
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_CHUNKING)
+            stat_info = os.stat(save_path)
+            father_chunks = await asyncio.to_thread(
+                chunk_markdown_text,
+                text=merged_text,
+                file_path=save_path,
+                upload_time=datetime.fromtimestamp(stat_info.st_ctime).isoformat(),
+                update_time=datetime.now(timezone.utc).isoformat(),
+                if_show=if_show,
+            )
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_CHUNKING,
+                **{"father_chunks": len(father_chunks)},
+            )
 
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_EMBEDDING)
-        embedding_model = EmbeddingModel()
-        semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
-        await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path)
-        await rewrite_chunks_with_coref(semantic_chunks)
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
-            **{"semantic_chunks": len(semantic_chunks)},
-        )
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_EMBEDDING)
+            embedding_model = EmbeddingModel()
+            semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
+            await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path)
+            await rewrite_chunks_with_coref(semantic_chunks)
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
+                **{"semantic_chunks": len(semantic_chunks)},
+            )
 
-        _check_cancelled(task_id)
-        await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
-        # 重切片为"覆盖式"：先删该文件旧切片，再用当前文本重新入库，保证不残留旧内容
-        try:
-            with _kb_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
-                conn.commit()
-        except Exception as e:
-            logger.warning(f"[Rechunk] 删除旧切片失败 {file_name}: {e}")
-        summary = await asyncio.to_thread(
-            store_semantic_chunks,
-            semantic_chunks,
-            schema="public",
-            table=os.getenv("PG_MYAGENT_KB_TABLE"),
-            upsert_key=("file_name", "text_hash"),
-        )
-        await asyncio.to_thread(
-            _set_task_status, task_id, UPLOAD_STATUS_COMPLETED,
-            **{
-                "chunk_count": summary.get("chunk_count", len(semantic_chunks)),
-                "inserted": summary.get("inserted", 0),
-                "updated": summary.get("updated", 0),
-                "father_chunks": len(father_chunks),
-                "original_name": original_name,
-            },
-        )
-        logger.info(f"[Rechunk] 重切片完成 {original_name}: {summary.get('chunk_count', 0)} 切片")
+            _check_cancelled(task_id)
+            await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
+            KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks_mgmt")
+            try:
+                with _kb_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
+                    conn.commit()
+            except Exception as e:
+                logger.warning(f"[Rechunk] 删除旧切片失败 {file_name}: {e}")
+            summary = await asyncio.to_thread(
+                store_semantic_chunks,
+                semantic_chunks,
+                schema="public",
+                table=os.getenv("PG_MYAGENT_KB_TABLE"),
+                upsert_key=("file_name", "text_hash"),
+            )
+            await asyncio.to_thread(
+                _set_task_status, task_id, UPLOAD_STATUS_COMPLETED,
+                **{
+                    "chunk_count": summary.get("chunk_count", len(semantic_chunks)),
+                    "inserted": summary.get("inserted", 0),
+                    "updated": summary.get("updated", 0),
+                    "father_chunks": len(father_chunks),
+                    "original_name": original_name,
+                },
+            )
+            logger.info(f"[Rechunk] 重切片完成 {original_name}: {summary.get('chunk_count', 0)} 切片")
     except TaskCancelled:
         logger.info(f"[Rechunk] 任务 {task_id} 被中止")
     except Exception as e:
@@ -640,13 +545,10 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     # 基于 PG 创建任务记录（跨 worker 共享）
     task_id = uuid.uuid4().hex[:12]
 
-    # 排队控制：若该 uid 已有进行中或排队中的任务，新任务入队等待，否则立即启动
-    busy = _has_active_task(uid, _UPLOAD_BUSY_STATUSES)
-    init_status = UPLOAD_STATUS_QUEUED if busy else UPLOAD_STATUS_SAVING
+    # 并发模式：不再排队，直接启动（信号量 _upload_sem 控制并发上限）
+    init_status = UPLOAD_STATUS_SAVING
     if not _create_task(task_id, uid, original_name, save_name, save_path, len(content),
                         status=init_status, expire_time=expire_iso, if_show=if_show):
-        # 任务记录创建失败（多为 PG 异常：表结构不一致、连接失败等）。
-        # 回滚已保存的物理文件，避免产生既不可见又删不掉的孤儿文件。
         try:
             if os.path.exists(save_path):
                 os.remove(save_path)
@@ -655,21 +557,10 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
             logger.warning(f"[UploadTask] 回滚物理文件失败: {save_path}: {rollback_err}")
         return JSONResponse(
             status_code=409,
-            content={"error": "任务创建失败，请稍后重试；如反复失败请检查服务端日志", "task_id": task_id},
+            content={"error": "任务创建失败，请稍后重试", "task_id": task_id},
         )
 
-    if busy:
-        # 排队，不启动后台；由前一个任务结束时通过 _trigger_next_queued 触发
-        logger.info(f"[UploadTask] 任务排队: {task_id} ({original_name})")
-        return JSONResponse(content={
-            "success": True,
-            "task_id": task_id,
-            "queued": True,
-            "original_name": original_name,
-            "message": "已有上传任务进行中，已加入队列等待处理...",
-        })
-
-    # 无活跃任务，立即启动后台异步处理，不阻塞当前请求
+    # 立即启动后台异步处理，信号量控制并发上限
     asyncio.create_task(_background_process(task_id, save_path, original_name, uid=uid,
                                             expire_time=expire_iso, if_show=if_show))
 
@@ -964,11 +855,11 @@ async def kb_task_cancel(task_id: str, _: TokenData = Depends(get_current_user))
                     return JSONResponse(status_code=404, content={"error": "任务不存在", "task_id": task_id})
                 status = row[0]
 
-                if status == UPLOAD_STATUS_QUEUED:
-                    # 排队任务直接删，立即生效
+                if status == UPLOAD_STATUS_CANCELLED:
+                    # 已中止的任务直接删
                     cur.execute(f"DELETE FROM {UPLOAD_TASKS_TABLE} WHERE task_id = %s", (task_id,))
                     conn.commit()
-                    logger.info(f"[KBTaskCancel] 排队任务直接删除: {task_id}")
+                    logger.info(f"[KBTaskCancel] 已中止任务直接删除: {task_id}")
                     return JSONResponse(content={"success": True, "action": "deleted", "task_id": task_id})
 
                 if status in _UPLOAD_ACTIVE_STATUSES:
@@ -1098,9 +989,7 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
     uid = current_user.uid if current_user else "anonymous"
-    # 活跃任务存在时不重复提交重切片，避免并发搅乱数据
-    if _has_active_task(uid, _UPLOAD_BUSY_STATUSES):
-        return JSONResponse(status_code=409, content={"error": "存在进行中/排队任务，请稍后再试"})
+    # 并发模式：不再限制单用户重切片，信号量控制并发
 
     task_id = uuid.uuid4().hex[:12]
     if not _create_task(task_id, uid, row["original_name"], row["file_name"],
