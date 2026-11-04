@@ -27,57 +27,8 @@ from sso_did.auth import TokenData, get_current_user
 # 调度入口：ChunkPipeline
 # ============================================================
 class ChunkPipeline:
-    """Markdown 切块、语义切分并入库的简易流水线。"""
-
-    def run(
-        self,
-        *,
-        file_path: str | Path,
-    ) -> dict[str, Any]:
-        path = Path(file_path)
-        logger.info(f"ChunkPipeline 开始处理文件: {path}")
-        if not path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
-        if not path.is_file():
-            raise ValueError(f"Not a file: {path}")
-
-        stat = path.stat()
-
-        logger.info("开始解析原始文件内容")
-        parsed_text = DocumentParser().parse_file(str(path))
-
-        logger.info("开始生成父级分块")
-        father_chunks = chunk_markdown_text(
-            text=parsed_text,
-            file_path=path,
-            upload_time=datetime.fromtimestamp(stat.st_ctime).isoformat(),
-            update_time=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-        )
-
-        logger.info(f"父级分块完成，数量: {len(father_chunks)}")
-        logger.info("开始初始化向量模型")
-        embedding_model = EmbeddingModel()
-
-        logger.info("开始生成语义分块")
-        semantic_chunks = build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
-
-        # 依据 anchors.json 按文本匹配给"图片对应的文字"子块填 related_image_url(可渲染 URL)
-        resolve_child_image_urls(semantic_chunks, str(path))
-
-        logger.info(f"语义分块完成，数量: {len(semantic_chunks)}")
-        logger.info(f"开始写入 PG: {os.getenv('PG_MYAGENT_KB_TABLE')}")
-        summary = store_semantic_chunks(
-            semantic_chunks,
-            schema="public",
-            table=os.getenv("PG_MYAGENT_KB_TABLE"),
-            upsert_key=("file_name", "text_hash"),  # 内容级去重：同一文件相同 text_hash 的行直接覆盖
-        )
-        summary["file_path"] = str(path)
-        summary["father_chunk_count"] = len(father_chunks)
-        # 将切片数据一并返回
-        summary["chunks"] = [c.model_dump() for c in semantic_chunks]
-        logger.info(f"文件处理完成: {path}")
-        return summary
+    """旧版同步流水线，已废弃。异步处理走 _background_process。"""
+    pass
 
 
 # ================= 上传任务状态跟踪 =================
@@ -331,7 +282,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
         async with _upload_sem:
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
             logger.info(f"[Task {task_id}] 开始解析文件: {save_path}")
-            parsed_text = await DocumentParser().parse_file(save_path)
+            parsed_text = await DocumentParser().parse_file(save_path, display_name=original_name)
 
             _check_cancelled(task_id)
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_CHUNKING)
@@ -502,24 +453,13 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
             content={"error": f"不支持的文件格式: {ext}，支持: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"},
         )
     original_name = file.filename or "unknown"
-    # 使用 display_name（若有）作为入库 file_name 的一部分；物理文件仍用原始名防冲突
-    canonical_name = display_name.strip() if display_name and display_name.strip() else original_name
+    # 使用 display_name（若有）作为展示名；物理文件名用 UUID 防冲突
+    display_name_final = display_name.strip() if display_name and display_name.strip() else original_name
     # 保证扩展名与原始文件一致
-    if not canonical_name.lower().endswith(ext):
-        canonical_name = canonical_name + ext
-    # 文件名 = 原文件名(去扩展名的展示名) + "_" + 登录用户 uid，保证不同用户/KB 来源互不覆盖。
-    # uid 直接进入文件名，需清洗掉路径分隔符与非法字符，防目录穿越与路径注入。
-    _raw_uid = uid or "unknown"
-    _safe_uid = re.sub(r"[^\w.\-]+", "_", _raw_uid)
-    _safe_uid = re.sub(r"_+", "_", _safe_uid).strip("._")
-    if len(_safe_uid) > 64:
-        _safe_uid = _safe_uid[:64].strip("._")
-    if not _safe_uid:
-        _safe_uid = "unknown"
-    _stem, _ext = os.path.splitext(canonical_name)
-    # 将文件名中的空格替换为下划线，与解析产物目录命名保持一致
-    _stem = _stem.replace(" ", "_")
-    save_name = f"{_stem}_{_safe_uid}{_ext}"
+    if not display_name_final.lower().endswith(ext):
+        display_name_final = display_name_final + ext
+    # 物理文件名：用短 UUID 替代原名，彻底避免空格/中文/特殊字符导致的路径问题
+    save_name = f"{task_id}{ext}" if False else f"{uuid.uuid4().hex[:12]}{ext}"
     save_path = str(UPLOAD_DIR / save_name)
 
     # 解析并校验过期时间：空=永久有效；非法格式返回 400
@@ -547,7 +487,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
 
     # 并发模式：不再排队，直接启动（信号量 _upload_sem 控制并发上限）
     init_status = UPLOAD_STATUS_SAVING
-    if not _create_task(task_id, uid, original_name, save_name, save_path, len(content),
+    if not _create_task(task_id, uid, display_name_final, save_name, save_path, len(content),
                         status=init_status, expire_time=expire_iso, if_show=if_show):
         try:
             if os.path.exists(save_path):
@@ -641,18 +581,20 @@ async def kb_files(_: TokenData = Depends(get_current_user)):
         try:
             ingested_names = {f["file_name"] for f in files}
             now_ts = datetime.now().timestamp()
-            # 新鲜度保护窗口：刚上传的文件可能正在入库（事务未提交），此时知识库表
-            # 尚查不到、任务表也可能已清，会被误判为 orphan。给入库留 120s 缓冲，
-            # 期间不把磁盘文件当孤儿，避免“上传成功却显示未入库”的竞态。
             FRESH_GRACE_SECS = 120
+            # 从任务表取 save_name -> original_name 映射，用于孤儿文件还原展示名
+            task_name_map = {r[0]: r[1] for r in task_rows if r[0] and r[1]} if task_rows else {}
             for name in sorted(os.listdir(UPLOAD_DIR)):
                 if name.startswith(".") or name == ".gitkeep":
                     continue
                 full = str(UPLOAD_DIR / name)
                 if name in ingested_names or name in task_map:
-                    continue  # 已入库或有活跃/历史任务，不算孤儿
-                # 还原展示名：去掉前缀 uuid_
-                orig = name.split("_", 1)[1] if "_" in name else name
+                    continue
+                mtime = os.path.getmtime(full)
+                if now_ts - mtime < FRESH_GRACE_SECS:
+                    continue
+                # 还原展示名：优先从任务表取，否则用物理文件名
+                orig = task_name_map.get(name, name)
                 mtime = os.path.getmtime(full)
                 if now_ts - mtime < FRESH_GRACE_SECS:
                     continue  # 刚上传，可能在入库中，暂不当孤儿

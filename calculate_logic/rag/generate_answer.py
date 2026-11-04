@@ -1242,22 +1242,33 @@ async def chat_stream(
 async def conversation_judgement(session_id: str = Body(...),
                                  turn_count: int = Body(...),
                                  judgement: str = Body(...),
+                                 detail: str = Body("", embed=True),
                                  _: TokenData = Depends(get_current_user)):
-    """记录用户对某轮 AI 回答的反馈：judgement in {"like", "dislike", ""}，写入 user_judgement 字段；传空串表示取消反馈。"""
+    """记录用户对某轮 AI 回答的反馈：judgement in {"like", "dislike", ""}。
+    detail: 可选，点踩时的不满原因（如"回答不准确"等）。
+    """
     if judgement not in {"like", "dislike", ""}:
         return {"success": False, "error": "judgement 仅支持 like/dislike（空串表示取消）"}
     if turn_count < 1:
         return {"success": False, "error": "turn_count 必须为正整数"}
     try:
         with _pg_conn() as conn:
-            cur = conn.execute(
-                f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
-                "SET user_judgement = NULLIF(%s, '') "
-                "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
-                (judgement, session_id, turn_count),
-            )
+            if detail and judgement == "dislike":
+                cur = conn.execute(
+                    f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
+                    "SET user_judgement = NULLIF(%s, ''), judgement_detail = %s "
+                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
+                    (judgement, detail, session_id, turn_count),
+                )
+            else:
+                cur = conn.execute(
+                    f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
+                    "SET user_judgement = NULLIF(%s, '') "
+                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
+                    (judgement, session_id, turn_count),
+                )
             conn.commit()
-        logger.info(f"[Judgement] 已记录反馈: session={session_id[:8]}... turn={turn_count} judgement='{judgement}' 受影响{cur.rowcount}行")
+        logger.info(f"[Judgement] 已记录反馈: session={session_id[:8]}... turn={turn_count} judgement='{judgement}' detail='{detail}' 受影响{cur.rowcount}行")
         return {"success": True, "session_id": session_id, "turn_count": turn_count, "judgement": judgement}
     except Exception as e:
         logger.error(f"[Judgement] 记录反馈失败: {e}")

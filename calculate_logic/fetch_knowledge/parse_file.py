@@ -77,7 +77,7 @@ class DocumentParser:
     # ============================================================
     # 解析文件统一入口 —— 根据文件类型分发路由
     # ============================================================
-    async def parse_file(self, file_path: str) -> str:
+    async def parse_file(self, file_path: str, display_name: str | None = None) -> str:
         if not os.path.exists(file_path):
             logger.error(f"文件不存在：{file_path}")
             return ""
@@ -85,22 +85,22 @@ class DocumentParser:
         logger.info(f"文件格式为{ext}，开始解析{file_path}")
         try:
             if ext in ['.txt', '.md', '.csv']:
-                full_text = await self._parse_text(file_path)
+                full_text = await self._parse_text(file_path, display_name)
             elif ext == '.pdf':
-                full_text = await self._parse_pdf_pipeline(file_path)
+                full_text = await self._parse_pdf_pipeline(file_path, display_name)
             elif ext in ['.jpeg', '.jpg', '.png']:
-                full_text = await self._parse_image(file_path)
+                full_text = await self._parse_image(file_path, display_name)
             elif ext in ['.docx']:
-                full_text = await self._parse_word(file_path)
+                full_text = await self._parse_word(file_path, display_name)
             elif ext == '.pptx':
-                full_text = await self._parse_office_via_mineru(file_path)
+                full_text = await self._parse_office_via_mineru(file_path, display_name)
             elif ext in ['.xlsx', '.xls']:
-                full_text = await self._parse_excel(file_path)
+                full_text = await self._parse_excel(file_path, display_name)
             else:
                 logger.warning(f"暂不支持的文件格式: {ext}")
                 full_text = ""
         except Exception as e:
-            logger.error(f"文件解析失败: {e}")
+            logger.exception(f"文件解析失败: {e}")
             full_text = ""
         
         return full_text
@@ -123,7 +123,7 @@ class DocumentParser:
     # ============================================================
     # 纯文本文件解析，并使用_enhance_text_to_markdown转为markdown格式
     # ============================================================
-    async def _parse_text(self, file_path: str) -> str:
+    async def _parse_text(self, file_path: str, display_name: str | None = None) -> str:
         try:
             raw = await self._read_text_auto(file_path)
             if not raw or not raw.strip():
@@ -135,7 +135,7 @@ class DocumentParser:
                 text = raw.strip()
             else:
                 text = await self._enhance_text_to_markdown(raw)
-            await self._write_merged_md(self._office_output_dir(file_path), text)
+            await self._write_merged_md(self._office_output_dir(file_path, display_name), text)
             return text
         except PermissionError:
             logger.error(f"文件权限不足：{file_path}")
@@ -147,8 +147,8 @@ class DocumentParser:
     # ============================================================
     # PDF 解析，根据内容分别使用MinerU / VLM
     # ============================================================
-    async def _parse_pdf_pipeline(self, file_path: str) -> str:
-        minur_u_process = MinerUProcessor(file_path)
+    async def _parse_pdf_pipeline(self, file_path: str, display_name: str | None = None) -> str:
+        minur_u_process = MinerUProcessor(file_path, display_name=display_name)
         all_page_results = []
 
         try:
@@ -183,17 +183,17 @@ class DocumentParser:
             merged = minur_u_process.merge_page_results(all_page_results)
             await minur_u_process.write_anchors_json(merged)
             text = await self._enhance_text_to_markdown(merged.get("md_content", ""))
-            await self._write_merged_md(self._office_output_dir(file_path), text)
+            await self._write_merged_md(self._office_output_dir(file_path, display_name), text)
             return text
 
         except Exception as e:
-            logger.error(f"PDF解析失败: {e}")
+            logger.exception(f"PDF解析失败: {e}")
             return ""
 
     # ============================================================
     # Office→PDF 统一走 MinerU：嵌入图片等同 PDF 一样做锚点映射落库
     # ============================================================
-    async def _parse_office_via_mineru(self, file_path: str) -> str:
+    async def _parse_office_via_mineru(self, file_path: str, display_name: str | None = None) -> str:
         tmp_dir = tempfile.mkdtemp(prefix="myagent_office_pdf_")
         try:
             pdf_path = os.path.join(tmp_dir, Path(file_path).stem + ".pdf")
@@ -201,7 +201,7 @@ class DocumentParser:
                 raise RuntimeError(f"Office→PDF 转换失败: {file_path}")
             if not os.path.exists(pdf_path):
                 raise RuntimeError(f"Office→PDF 未产出文件: {file_path}")
-            text = await self._parse_pdf_pipeline(pdf_path)
+            text = await self._parse_pdf_pipeline(pdf_path, display_name)
             if not text:
                 raise RuntimeError(f"Office→PDF→MinerU 解析结果为空: {file_path}")
             return text
@@ -247,12 +247,12 @@ class DocumentParser:
             logger.warning(f"Excel 图片定位失败: {e}")
         return result
 
-    async def _parse_excel(self, file_path: str) -> str:
+    async def _parse_excel(self, file_path: str, display_name: str | None = None) -> str:
         try:
             import pandas as pd
             from openpyxl import load_workbook
 
-            out_dir = self._office_output_dir(file_path)
+            out_dir = self._office_output_dir(file_path, display_name)
             anchors: list = []
             cell_imgs = self._extract_excel_cell_images(file_path)
 
@@ -314,7 +314,7 @@ class DocumentParser:
     # ============================================================
     # 图片解析
     # ============================================================
-    async def _parse_image(self, file_path: str) -> str:
+    async def _parse_image(self, file_path: str, display_name: str | None = None) -> str:
         try:
             async with aiofiles.open(file_path, "rb") as f:
                 img_bytes = await f.read()
@@ -323,7 +323,7 @@ class DocumentParser:
             logger.error(f"图片解析失败: {e}")
             return ""
         await self._write_image_only_anchor(file_path, desc)
-        out_dir = self._office_output_dir(file_path)
+        out_dir = self._office_output_dir(file_path, display_name)
         stem = Path(file_path).stem.replace(" ", "_")
         ext = os.path.splitext(file_path)[1].lower() or ".png"
         img_url = f"/api/media/extracted/{stem}/{stem}{ext}"
@@ -372,7 +372,7 @@ class DocumentParser:
         # HTML 表格先转 MD，再由 _clean_markdown_text 统一归一化（表格保护、空行、去 emoji）
         text = self._convert_html_tables_to_markdown(text)
         text = self._clean_markdown_text(text)
-        return self._llm_markdown_enhance(text)
+        return await self._llm_markdown_enhance(text)
 
     # ============================================================
     # 图片标准化：统一转 RGB JPEG、限最长边、压缩质量，用于喂给 VLM
@@ -415,13 +415,15 @@ class DocumentParser:
     # ============================================================
     async def _call_vlm(self, img_bytes: bytes) -> str:
         if not img_bytes or len(img_bytes) < 100:
-            logger.error(f"图片数据无效：字节长度 {len(img_bytes) if img_bytes else 0}，可能图片损坏或为空")
+            logger.error(f"[VLM] 图片数据无效：字节长度 {len(img_bytes) if img_bytes else 0}")
             return "[解析失败：图片数据无效]"
 
         img_bytes = self._normalize_image_bytes(img_bytes)
         if not img_bytes:
-            logger.warning("图片标准化失败或为无效位图（可能是 EMF/SVG/损坏图），跳过 VLM 识别")
+            logger.warning("[VLM] 图片标准化失败或为无效位图（可能是 EMF/SVG/损坏图），跳过")
             return ""
+
+        logger.info(f"[VLM] 开始识别图片 ({len(img_bytes)} bytes)")
 
         base64_image = base64.b64encode(img_bytes).decode('utf-8')
         principle = """
@@ -559,6 +561,7 @@ class DocumentParser:
                     return ""
 
                 raw_content = get_md_content(message.content)
+                logger.info(f"[VLM] 识别完成，产出文本长度: {len(raw_content or '')}")
                 return self._clean_markdown_text(raw_content)
             except Exception as e:
                 logger.error(f"VLM API 调用失败: {e}")
@@ -588,6 +591,7 @@ class DocumentParser:
             expected_pdf_path = os.path.join(os.path.dirname(output_path) or ".", os.path.splitext(os.path.basename(input_path))[0] + ".pdf")
             if os.path.exists(expected_pdf_path) and proc.returncode == 0:
                 os.rename(expected_pdf_path, output_path)
+                logger.info(f"[Office→PDF] 转换成功: {input_path} → {output_path}")
                 return True
             stderr_data = await proc.stderr.read() if proc.stderr else b""
             logger.warning(f"Office 转 PDF 失败: {stderr_data.decode('utf-8', errors='ignore')}")
@@ -1015,20 +1019,19 @@ class DocumentParser:
     # ============================================================
     # Office 解析产物统一落盘：merged.md(整篇Markdown) + anchors.json(图↔内容映射)
     # ============================================================
-    def _office_output_dir(self, file_path: str) -> Path:
-        stem = Path(file_path).stem
-        # 将文件名中的空格替换为下划线，避免 URL 中出现 raw space 导致 404
+    def _office_output_dir(self, file_path: str, display_name: str | None = None) -> Path:
+        stem = Path(display_name or file_path).stem
         stem = stem.replace(" ", "_")
         return PARSE_RESULT_DIR / stem
 
     def _save_anchor_image(self, out_dir: Path, img_bytes: bytes, img_name: str) -> str:
-        """把一张图落盘到 <out_dir>/images/，返回绝对路径；失败返回空串。"""
         img_dir = out_dir / "images"
         img_dir.mkdir(parents=True, exist_ok=True)
         safe_name = re.sub(r'[^\w.\-]', "_", img_name or "image.png") or "image.png"
         dst = img_dir / safe_name
         if not dst.exists():
             dst.write_bytes(img_bytes)
+            logger.info(f"[parse_file] 图片落盘: {dst} ({len(img_bytes)} bytes)")
         return str(dst)
 
     async def _write_merged_md(self, out_dir: Path, md_text: str) -> Path:
@@ -1099,10 +1102,10 @@ class DocumentParser:
                 logger.warning(f"[Word图片] 关系 {rid} 读取失败: {e}")
         return images
 
-    async def _parse_word(self, file_path: str) -> str:
+    async def _parse_word(self, file_path: str, display_name: str | None = None) -> str:
         from docx import Document
 
-        out_dir = self._office_output_dir(file_path)
+        out_dir = self._office_output_dir(file_path, display_name)
         anchors: list = []
         md_lines: list[str] = []
         anchor_idx = 0

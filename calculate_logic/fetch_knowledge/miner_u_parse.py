@@ -100,9 +100,12 @@ class MinerUProcessor:
         mineru_api_base: str = config["MINERU_API_BASE"],
         base_url: str = config["BASE_URL"],
         vlm_model: str = config["VLM_MODEL"],
+        display_name: str | None = None,
     ):
         self.pdf_path = str(pdf_path)
-        self.file_stem = Path(self.pdf_path).stem.replace(" ", "_")  # 文档名（不含扩展名），空格替换为下划线避免 URL 问题
+        # 优先用 display_name 做产物目录名，保持可读性；空格替换为下划线
+        _name_stem = Path(display_name).stem if display_name else Path(self.pdf_path).stem
+        self.file_stem = _name_stem.replace(" ", "_")
         self.output_dir = Path(output_dir)
 
         # 每份 PDF 单独一个子目录，所有中间/最终产物都挂在该文档目录下，防止不同文档的 page_results/images/merged.md 相互覆盖
@@ -584,13 +587,15 @@ class MinerUProcessor:
 
     # ======================= 6. 渲染整页 PDF 为图片 ==================================
     def render_page_pdf_to_image(self, page_pdf_path: str, page_no: int, zoom: float = 2.0):
+        logger.info(f"[MinerU] 第 {page_no} 页整页渲染开始 (zoom={zoom})")
         doc = fitz.open(page_pdf_path)
         page = doc[0]
-        mat = fitz.Matrix(zoom, zoom)  # 放大2倍
+        mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         out_path = self.page_render_dir / f"page_{page_no:04d}_render.png"
         pix.save(out_path)
         doc.close()
+        logger.info(f"[MinerU] 第 {page_no} 页整页渲染完成: {out_path} ({pix.width}x{pix.height})")
         return str(out_path)
 
     # ======================== 7. Markdown 图片引用处理 =================================

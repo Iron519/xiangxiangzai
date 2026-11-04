@@ -65,9 +65,10 @@ class EmbeddingModel:
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         clean_texts = [text.strip() for text in texts if text.strip()]
         if not clean_texts:
-            logger.info("embedding 跳过：没有可用文本")
+            logger.info("[Embedding] 跳过：没有可用文本")
             return []
 
+        logger.info(f"[Embedding] 开始向量化，文本数: {len(clean_texts)}")
         vectors: list[list[float]] = []
         max_chars_per_batch = 800
         max_chars_single = 800
@@ -111,6 +112,8 @@ class EmbeddingModel:
                     input=current_batch,
                 )
             vectors.extend(item.embedding for item in response.data if item.embedding)
+
+        logger.info(f"[Embedding] 完成，生成向量数: {len(vectors)}")
 
         return vectors
 

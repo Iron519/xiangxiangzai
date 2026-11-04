@@ -570,7 +570,9 @@ def resolve_child_image_urls(semantic_chunks: Sequence[SemanticChunkOutput], sav
         if a.get("text") and a.get("image_paths")
     ]
     if not anchors:
+        logger.info("[ImageURL] 无锚点数据，跳过图片 URL 映射")
         return
+    logger.info(f"[ImageURL] 加载锚点 {len(anchors)} 条，开始文本匹配")
     # 预处理：仅保留文本足够长且确有可渲染图的锚点
     useful = []
     for a in anchors:
@@ -601,10 +603,12 @@ def resolve_child_image_urls(semantic_chunks: Sequence[SemanticChunkOutput], sav
 
     # 子块继承：把父块命中的 url 填到该组每个子块(未赋值者)
     if not group_map:
+        logger.info("[ImageURL] 无父块命中图片锚点")
         return
     for chunk in semantic_chunks:
         if getattr(chunk, "related_image_url", ""):
-            continue  # 已赋值则跳过
+            continue
         gid = getattr(chunk, "group_id", None)
         if gid in group_map:
             chunk.related_image_url = group_map[gid]
+    logger.info(f"[ImageURL] 映射完成: {len(group_map)} 个父块命中图片，已填充子块 URL")

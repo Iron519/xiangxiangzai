@@ -1,8 +1,8 @@
 FROM python:3.12-slim
 
-# 安装 LibreOffice（用于 Office 转 PDF）+ 中文字体（精简版）
+# 安装 LibreOffice（用于 Office 转 PDF：Writer/Calc/Impress）+ 中文字体
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-writer libreoffice-calc \
+    libreoffice-writer libreoffice-calc libreoffice-impress \
     fonts-wqy-zenhei \
     && rm -rf /var/lib/apt/lists/*
 

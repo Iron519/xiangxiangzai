@@ -797,6 +797,7 @@
     .chat-msg__act-btn:active { transform: scale(0.88); }
     .chat-msg__act-btn.clicked { animation: actPop 0.35s ease; }
     @keyframes actPop { 0% { transform: scale(1); } 40% { transform: scale(1.25); } 100% { transform: scale(1); } }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
     .chat-msg__act-btn::after {
       content: attr(data-tip);
       position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translate(-50%, 3px);
@@ -951,7 +952,7 @@
       <div class="sidebar-header">
         <div class="sidebar-logo" onclick="switchPage('chat')">
           <img src="/front_end_assets/Avatar.svg" class="sidebar-logo-icon" alt="小象老师" style="width:36px;height:36px;border-radius:10px;object-fit:contain" />
-          <div class="sidebar-logo-text">我的工作区</div>
+          <div class="sidebar-logo-text">小象老师</div>
         </div>
       </div>
 
@@ -1440,6 +1441,39 @@
     <div class="modal-footer">
       <button class="btn-secondary" onclick="closeProfile()">取消</button>
       <button class="btn-primary" onclick="saveProfile()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 点踩反馈弹窗 -->
+<div class="modal-overlay" id="dislikeModal" style="display:none">
+  <div class="modal-dialog" style="max-width:380px">
+    <div class="modal-header">反馈不满意原因</div>
+    <div class="modal-body">
+      <div id="dislikeOptions" style="display:flex;flex-wrap:wrap;gap:8px">
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid var(--c-border);transition:all var(--dur) var(--ease)">
+          <input type="radio" name="dislikeReason" value="回答不准确" style="display:none"> 回答不准确
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid var(--c-border);transition:all var(--dur) var(--ease)">
+          <input type="radio" name="dislikeReason" value="内容不完全" style="display:none"> 内容不完全
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid var(--c-border);transition:all var(--dur) var(--ease)">
+          <input type="radio" name="dislikeReason" value="引入错误信息" style="display:none"> 引入错误信息
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid var(--c-border);transition:all var(--dur) var(--ease)">
+          <input type="radio" name="dislikeReason" value="话术粗糙" style="display:none"> 话术粗糙
+        </label>
+        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:13px;padding:6px 14px;border-radius:20px;border:1px solid var(--c-border);transition:all var(--dur) var(--ease)">
+          <input type="radio" name="dislikeReason" value="其他" style="display:none"> 其他
+        </label>
+      </div>
+      <div id="dislikeOtherWrap" style="display:none;margin-top:10px">
+        <input type="text" class="modal-input" id="dislikeOtherText" placeholder="请描述具体原因" style="width:100%" />
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="dislikeCancel">取消</button>
+      <button class="btn-primary" id="dislikeSubmit">提交反馈</button>
     </div>
   </div>
 </div>
@@ -2513,8 +2547,35 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const turn = msg && msg.dataset.turn;
     if (!turn) return;
     if (btn.disabled) return;
+
+    if (judgement === 'dislike') {
+      if (msg.dataset.judgement === 'dislike') {
+        // 已点踩，再点取消
+        await _submitJudgement(msg, btn, '');
+      } else {
+        // 点踩：弹出反馈弹窗
+        _pendingDislikeMsg = msg;
+        _pendingDislikeBtn = btn;
+        document.querySelectorAll('input[name="dislikeReason"]').forEach(r => r.checked = false);
+        document.getElementById('dislikeOtherWrap').style.display = 'none';
+        document.getElementById('dislikeOtherText').value = '';
+        document.getElementById('dislikeModal').style.display = 'flex';
+      }
+      return;
+    }
+
+    // 点赞：直接提交
     btn.disabled = true;
     const mode = msg.dataset.judgement === judgement ? '' : judgement;
+    await _submitJudgement(msg, btn, mode);
+    btn.disabled = false;
+  }
+
+  let _pendingDislikeMsg = null;
+  let _pendingDislikeBtn = null;
+
+  async function _submitJudgement(msg, btn, mode) {
+    const turn = msg.dataset.turn;
     try {
       const res = await apiFetch('/conversation/judgement', {
         method: 'POST',
@@ -2523,27 +2584,24 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       });
       const data = await res.json().catch(() => ({}));
       if (data.success) {
-        // 以 DB 返回为准，更新 UI 选中态并持久化
         msg.dataset.judgement = data.judgement || '';
         const msgs = Store.get('chat', []);
         const hit = msgs.find(m => m.role === 'ai' && String(m.turnCount) === turn);
         if (hit) hit.judgement = msg.dataset.judgement || '';
         Store.set('chat', msgs);
-        btnFlash(btn, msg.dataset.judgement === judgement ? '完成 ✓' : '已取消');
+        btnFlash(btn, msg.dataset.judgement === 'like' ? '已点赞' : (msg.dataset.judgement === 'dislike' ? '已点踩' : '已取消'));
       } else {
-        alert('保存反馈失败：' + (data.error || '未知'));
+        btnFlash(btn, '保存失败');
       }
     } catch (e) {
-      alert('保存反馈失败：' + e.message);
-    } finally {
-      btn.disabled = false;
+      btnFlash(btn, '网络错误');
     }
   }
   function copyAnswer(btn) {
     const msg = btn.closest('.chat-msg');
     const text = msg && msg.dataset.text;
     if (!text) return;
-    btnFlash(btn, '已复制 ✓');
+    btnFlash(btn, '已复制');
 
     async function copyNative() {
       if (navigator.clipboard && window.isSecureContext) {
@@ -2563,7 +2621,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     }
 
     copyNative().catch(() => {
-      btnFlash(btn, '复制失败，请手动选择');
+      btnFlash(btn, '复制失败，请手动选择文本');
     });
   }
   function regenerateAnswer(btn) {
@@ -2582,6 +2640,64 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       sendMessage();
     }
   }
+  // ── 点踩弹窗事件 ──
+  document.querySelectorAll('input[name="dislikeReason"]').forEach(radio => {
+    radio.addEventListener('change', () => {
+      const isOther = radio.value === '其他';
+      document.getElementById('dislikeOtherWrap').style.display = isOther ? '' : 'none';
+      document.querySelectorAll('input[name="dislikeReason"]').forEach(r => {
+        const label = r.closest('label');
+        if (r.checked) {
+          label.style.borderColor = 'var(--c-brand)';
+          label.style.background = 'var(--c-brand)';
+          label.style.color = '#fff';
+        } else {
+          label.style.borderColor = 'var(--c-border)';
+          label.style.background = '';
+          label.style.color = '';
+        }
+      });
+    });
+  });
+  document.getElementById('dislikeCancel').addEventListener('click', () => {
+    document.getElementById('dislikeModal').style.display = 'none';
+  });
+  document.getElementById('dislikeSubmit').addEventListener('click', async () => {
+    const selected = document.querySelector('input[name="dislikeReason"]:checked');
+    if (!selected) {
+      const opts = document.getElementById('dislikeOptions');
+      opts.style.animation = 'shake 0.3s';
+      setTimeout(() => { opts.style.animation = ''; }, 300);
+      return;
+    }
+    let reason = selected.value;
+    if (reason === '其他') {
+      const other = document.getElementById('dislikeOtherText').value.trim();
+      if (!other) {
+        document.getElementById('dislikeOtherText').focus();
+        return;
+      }
+      reason = other;
+    }
+    document.getElementById('dislikeModal').style.display = 'none';
+    if (_pendingDislikeMsg && _pendingDislikeBtn) {
+      // 先提交 dislike 状态
+      await _submitJudgement(_pendingDislikeMsg, _pendingDislikeBtn, 'dislike');
+      // 再提交不满原因（写入 judgement_detail 字段，如果后端支持；否则仅前端记录）
+      try {
+        const turn = _pendingDislikeMsg.dataset.turn;
+        await apiFetch('/conversation/judgement', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId, turn_count: Number(turn), judgement: 'dislike', detail: reason })
+        });
+      } catch (e) { /* 忽略 detail 写入失败 */ }
+      btnFlash(_pendingDislikeBtn, '已提交反馈');
+    }
+    _pendingDislikeMsg = null;
+    _pendingDislikeBtn = null;
+  });
+
   // ==================== 启动引导：登录态就绪后再渲染应用 ====================
   function bootstrapApp() {
     // 用户身份已就绪：渲染用户区、应用角色权限、恢复页面、恢复聊天
