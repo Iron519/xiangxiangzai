@@ -1185,33 +1185,35 @@ async def chat_stream(
 
             # ── 主图事件循环 + 并行消费（敏感命中则跳过主图）──
             main_task = asyncio.create_task(run_main()) if not hit else None
-            # 注意：await asyncio.wait 返回的第二个值是"未完成"的任务集合，
-            # 作为下一轮 pending 使用，避免已完成 task 残留在 pending 中导致空转忙等。
-            get_task = asyncio.create_task(q.get())
-            pendings = {get_task} | ({main_task} if main_task else set())
-            try:
-                while True:
-                    done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
-                    if hit:
-                        break  # 已命中敏感，无需消费主图
-                    if get_task in done:
-                        item = get_task.result()
-                        if item is QUEUE_END:
-                            break
-                        yield item
-                        get_task = asyncio.create_task(q.get())
-                        pendings.add(get_task)
-            finally:
-                if not get_task.done():
-                    get_task.cancel()
+            if not hit:
+                # 正常流程：消费主图事件队列
+                get_task = asyncio.create_task(q.get())
+                pendings = {get_task} | ({main_task} if main_task else set())
+                try:
+                    while True:
+                        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
+                        if get_task in done:
+                            item = get_task.result()
+                            if item is QUEUE_END:
+                                break
+                            yield item
+                            get_task = asyncio.create_task(q.get())
+                            pendings.add(get_task)
+                finally:
+                    if not get_task.done():
+                        get_task.cancel()
+                    if main_task is not None and not main_task.done():
+                        main_task.cancel()
+                        try:
+                            await main_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+            else:
+                # 敏感命中：取消未完成的判定任务，不进入主图事件循环
+                if not scene_task.done():
+                    scene_task.cancel()
                 if not sens_task.done():
                     sens_task.cancel()
-                if main_task is not None and not main_task.done():
-                    main_task.cancel()
-                    try:
-                        await main_task
-                    except (asyncio.CancelledError, Exception):
-                        pass
 
             # ── 命中敏感：丢弃主图已产内容，下发固定话术 ──
             if hit:
