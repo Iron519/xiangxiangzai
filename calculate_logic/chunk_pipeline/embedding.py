@@ -304,7 +304,7 @@ def _upsert_chunks(
 ) -> tuple[int, int, list[int]]:
     """执行 UPSERT 并返回 (inserted, updated, affected_chunk_indexes)。"""
     insert_columns = (
-        "chunk_index", "child_content", "file_path", "file_name", "text_hash",
+        "chunk_index", "uid", "original_name", "child_content", "file_path", "file_name", "text_hash",
         "group_id", "internal_id", "parent_content", "related_image_url",
         "embedding", "embedding_dim",
         "upload_time", "update_time", "expire_time", "if_show",
@@ -354,6 +354,8 @@ def store_semantic_chunks(
     schema: str | None = None, table: str | None = None,
     truncate: bool = False,
     upsert_key: tuple[str, ...] | None = None,
+    uid: str = "",
+    original_name: str = "",
 ) -> dict[str, Any]:
     """将语义子块列表写入 PostgreSQL，并返回写入摘要。
 
@@ -366,6 +368,12 @@ def store_semantic_chunks(
         c if isinstance(c, SemanticChunkOutput) else SemanticChunkOutput.model_validate(c)
         for c in chunks
     ]
+    # 注入 uid 和 original_name 到每个 chunk（用于入库时写入对应字段）
+    for c in normalized_chunks:
+        if not getattr(c, "uid", None):
+            c.uid = uid
+        if not getattr(c, "original_name", None):
+            c.original_name = original_name
 
     pg_schema = schema or "public"
     pg_table = table or os.getenv("PG_MYAGENT_KB_TABLE")

@@ -68,7 +68,7 @@ def _range_clause(start_date: str | None = None, end_date: str | None = None) ->
     return (" WHERE " + " AND ".join(conds) if conds else ""), params
 
 # ================= 数据分析函数 =================
-def get_total_stats(start_date: str | None = None, end_date: str | None = None) -> dict:
+def get_total_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> dict:
     """基础统计：总对话数、总消息数、日均使用量。"""
     try:
         range_sql, range_params = _range_clause(start_date, end_date)
@@ -148,7 +148,7 @@ def get_total_stats(start_date: str | None = None, end_date: str | None = None) 
         return {}
 
 
-def get_mode_stats(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_mode_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """各对话模式的统计。"""
     try:
         range_sql, range_params = _range_clause(start_date, end_date)
@@ -182,7 +182,7 @@ def get_mode_stats(start_date: str | None = None, end_date: str | None = None) -
         return []
 
 
-def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """近 N 天每天的消息量和响应耗时趋势。"""
     try:
         base_sql, base_params = _range_clause(start_date, end_date)
@@ -221,7 +221,7 @@ def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str
         return []
 
 
-def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """最活跃的会话 TOP N。"""
     try:
         range_sql, range_params = _range_clause(start_date, end_date)
@@ -257,7 +257,7 @@ def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_dat
         return []
 
 
-def get_emotion_distribution(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_emotion_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """情绪分布（用于扇形图）。仅统计已打标的数据，排除 emotion 为空的记录。"""
     try:
         conds, range_params = _range_conds(start_date, end_date)
@@ -281,7 +281,7 @@ def get_emotion_distribution(start_date: str | None = None, end_date: str | None
         return []
 
 
-def get_tag_distribution(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_tag_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """主题标签分布（用于条形图）。多标签按英文逗号拆开分别计数。"""
     try:
         conds, range_params = _range_conds(start_date, end_date)
@@ -305,7 +305,7 @@ def get_tag_distribution(start_date: str | None = None, end_date: str | None = N
         return []
 
 
-def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """按天统计消极/紧急情绪数量趋势（用于 Negative Trend 折线图）。"""
     try:
         base_sql, base_params = _range_clause(start_date, end_date)
@@ -340,7 +340,7 @@ def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: 
         return []
 
 
-def get_hourly_distribution(start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_hourly_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """按小时分布（用于折线/柱状图）。"""
     try:
         range_sql, range_params = _range_clause(start_date, end_date)
@@ -362,7 +362,7 @@ def get_hourly_distribution(start_date: str | None = None, end_date: str | None 
         return []
 
 
-def get_duration_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None) -> list[dict]:
+def get_duration_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """每日平均耗时趋势（用于折线图）。"""
     try:
         base_sql, base_params = _range_clause(start_date, end_date)
@@ -402,19 +402,38 @@ router = APIRouter()
 @router.get("/stats/overview")
 async def stats_overview(start_date: str | None = Query(default=None),
                          end_date: str | None = Query(default=None),
-                         _: TokenData = Depends(get_current_user)):
-    """获取所有概览统计。start_date/end_date 可选，格式 YYYY-MM-DD，用于时间范围联动。"""
-    logger.info(f"[API] 获取概览统计 range={start_date}~{end_date}")
+                         current_user: TokenData = Depends(get_current_user)):
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    uid_filter = "AND uid = %s" if uid else ""
+    uid_params = [uid] if uid else []
+    """获取概览统计。admin 看全部，普通用户只看自己的数据。"""
+    uid = "" if current_user.is_admin else current_user.uid
+    logger.info(f"[API] 获取概览统计 range={start_date}~{end_date} uid={uid or 'ALL'}")
     try:
-        total_stats = get_total_stats(start_date=start_date, end_date=end_date)
-        mode_stats = get_mode_stats(start_date=start_date, end_date=end_date)
-        daily_stats = get_daily_stats(days=14, start_date=start_date, end_date=end_date)
-        trending = get_trending_sessions(limit=5, start_date=start_date, end_date=end_date)
-        emotion_dist = get_emotion_distribution(start_date=start_date, end_date=end_date)
-        tag_dist = get_tag_distribution(start_date=start_date, end_date=end_date)
-        hourly_dist = get_hourly_distribution(start_date=start_date, end_date=end_date)
-        duration_trend = get_duration_trend(days=14, start_date=start_date, end_date=end_date)
-        negative_trend = get_negative_trend(days=14, start_date=start_date, end_date=end_date)
+        total_stats = get_total_stats(start_date=start_date, end_date=end_date, uid=uid)
+        mode_stats = get_mode_stats(start_date=start_date, end_date=end_date, uid=uid)
+        daily_stats = get_daily_stats(days=14, start_date=start_date, end_date=end_date, uid=uid)
+        trending = get_trending_sessions(limit=5, start_date=start_date, end_date=end_date, uid=uid)
+        emotion_dist = get_emotion_distribution(start_date=start_date, end_date=end_date, uid=uid)
+        tag_dist = get_tag_distribution(start_date=start_date, end_date=end_date, uid=uid)
+        hourly_dist = get_hourly_distribution(start_date=start_date, end_date=end_date, uid=uid)
+        duration_trend = get_duration_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
+        negative_trend = get_negative_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
 
         return JSONResponse(content={
             "success": True,

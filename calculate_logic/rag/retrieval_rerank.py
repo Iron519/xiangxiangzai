@@ -338,7 +338,8 @@ class PgHybridRetriever:
 
     def _coarse_search(self, conn: psycopg.Connection, query_text: str, query_time: datetime,
                        query_embedding: List[float], vector_weight: float, keyword_weight: float,
-                       candidate_top_k: int, coarse_top_k: int, rrf_k: int) -> List[Dict[str, Any]]:
+                       candidate_top_k: int, coarse_top_k: int, rrf_k: int,
+                       uid: str = "") -> List[Dict[str, Any]]:
         # Python jieba 预分词（与入库端共享 tokenizer），用 simple 配置保证整词匹配
         tsquery_text = tokenize_for_tsquery(query_text)
 
@@ -352,7 +353,9 @@ class PgHybridRetriever:
             "coarse_top_k": coarse_top_k,
             "rrf_k": rrf_k,
             "tsquery_text": tsquery_text,
+            "uid": uid,
         }
+        uid_filter = "AND c.uid = %(uid)s" if uid else ""
 
         # 关键词检索：如果 jieba 分词结果非空，用 to_tsquery 精确 OR 匹配；
         # 否则回退到空结果集（不影响纯向量检索）。
@@ -366,6 +369,7 @@ class PgHybridRetriever:
                 FROM {self.table_name} c
                 WHERE c.content_tsv IS NOT NULL AND c.content_tsv @@ to_tsquery('simple', %(tsquery_text)s)
                   AND (c.expire_time IS NULL OR c.expire_time > %(query_time)s)
+                  {uid_filter}
                 ORDER BY keyword_rank_score DESC, c.update_time DESC NULLS LAST
                 LIMIT %(candidate_top_k)s
             ) ranked_keyword
@@ -386,6 +390,7 @@ class PgHybridRetriever:
                 FROM {self.table_name} c
                 WHERE c.embedding IS NOT NULL
                   AND (c.expire_time IS NULL OR c.expire_time > %(query_time)s)
+                  {uid_filter}
                 ORDER BY vector_distance ASC, c.update_time DESC NULLS LAST
                 LIMIT %(candidate_top_k)s
             ) ranked_vector
@@ -413,10 +418,11 @@ class PgHybridRetriever:
 
     def _sync_coarse(self, query_text: str, query_time: datetime, query_embedding: List[float],
                      vector_weight: float, keyword_weight: float,
-                     candidate_top_k: int, coarse_top_k: int, rrf_k: int) -> List[Dict[str, Any]]:
+                     candidate_top_k: int, coarse_top_k: int, rrf_k: int,
+                     uid: str = "") -> List[Dict[str, Any]]:
         with self._get_conn() as conn:
             return self._coarse_search(conn, query_text, query_time, query_embedding,
-                                       vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k)
+                                       vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid)
 
     # ----------------- 结果处理 -----------------
     @staticmethod
@@ -605,7 +611,8 @@ class PgHybridRetriever:
                      candidate_top_k: int = SEARCH_CANDIDATE_TOP_K,
                      coarse_top_k: int = SEARCH_COARSE_TOP_K,
                      rerank_top_k: int = SEARCH_RERANK_TOP_K,
-                     rrf_k: int = SEARCH_RRF_K) -> HybridSearchResponse:
+                     rrf_k: int = SEARCH_RRF_K,
+                     uid: str = "") -> HybridSearchResponse:
         logger.info(f"[search] 查询开始: query_text={query_text[:50]}...")
 
         query_text = query_text.strip()
@@ -632,7 +639,7 @@ class PgHybridRetriever:
         rows = await loop.run_in_executor(
             None,
             lambda: self._sync_coarse(query_text, query_time, query_emb,
-                                      vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k),
+                                      vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid),
         )
 
         coarse_results = [self._row_to_hit(r) for r in rows]
@@ -659,7 +666,8 @@ class PgHybridRetriever:
                            coarse_top_k: int = SEARCH_COARSE_TOP_K,
                            rerank_top_k: int = SEARCH_RERANK_TOP_K,
                            rrf_k: int = SEARCH_RRF_K,
-                           max_concurrent: int = MAX_CONCURRENT_SEARCHES) -> List[HybridSearchResponse]:
+                           max_concurrent: int = MAX_CONCURRENT_SEARCHES,
+                           uid: str = "") -> List[HybridSearchResponse]:
         logger.info(f"[batch_search] 查询开始: {len(queries)}个查询, 并发={max_concurrent}")
 
         sem = asyncio.Semaphore(max_concurrent)
@@ -667,7 +675,7 @@ class PgHybridRetriever:
         async def _one(query: str) -> HybridSearchResponse:
             async with sem:
                 return await self.search(query, None, vector_weight, keyword_weight,
-                                         candidate_top_k, coarse_top_k, rerank_top_k, rrf_k)
+                                         candidate_top_k, coarse_top_k, rerank_top_k, rrf_k, uid=uid)
 
         raw = await asyncio.gather(*[_one(q) for q in queries], return_exceptions=True)
         results = []

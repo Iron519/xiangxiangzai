@@ -324,7 +324,9 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
                 semantic_chunks,
                 schema="public",
                 table=os.getenv("PG_MYAGENT_KB_TABLE"),
-                upsert_key=("file_name", "text_hash"),
+                upsert_key=("uid", "file_name", "text_hash"),
+                uid=uid,
+                original_name=original_name,
             )
 
             await asyncio.to_thread(
@@ -393,7 +395,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             try:
                 with _kb_conn() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
+                        cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s AND uid = %s", (file_name, uid))
                     conn.commit()
             except Exception as e:
                 logger.warning(f"[Rechunk] 删除旧切片失败 {file_name}: {e}")
@@ -402,7 +404,9 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                 semantic_chunks,
                 schema="public",
                 table=os.getenv("PG_MYAGENT_KB_TABLE"),
-                upsert_key=("file_name", "text_hash"),
+                upsert_key=("uid", "file_name", "text_hash"),
+                uid=uid,
+                original_name=original_name,
             )
             await asyncio.to_thread(
                 _set_task_status, task_id, UPLOAD_STATUS_COMPLETED,
@@ -519,7 +523,7 @@ KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "")
 
 
 @router.get("/kb/files")
-async def kb_files(_: TokenData = Depends(get_current_user)):
+async def kb_files(current_user: TokenData = Depends(get_current_user)):
     """返回知识库中所有文件的聚合信息列表。
 
     包含两类文件：
@@ -529,23 +533,42 @@ async def kb_files(_: TokenData = Depends(get_current_user)):
     """
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
+    uid = current_user.uid
+    is_admin = current_user.is_admin
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        k.file_name,
-                        COALESCE(t.original_name, k.file_name) AS original_name,
-                        k.file_path,
-                        COUNT(*)                                          AS total_chunks,
-                        COUNT(DISTINCT k.group_id)                        AS parent_chunks,
-                        MIN(k.upload_time)                                AS upload_time,
-                        MAX(k.update_time)                                AS last_update
-                    FROM {KB_TABLE} k
-                    LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
-                    GROUP BY k.file_name, k.file_path, t.original_name
-                    ORDER BY MIN(k.upload_time) DESC
-                """)
+                if is_admin:
+                    cur.execute(f"""
+                        SELECT
+                            k.file_name,
+                            COALESCE(k.original_name, t.original_name, k.file_name) AS original_name,
+                            k.file_path,
+                            COUNT(*)                                          AS total_chunks,
+                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                            MIN(k.upload_time)                                AS upload_time,
+                            MAX(k.update_time)                                AS last_update
+                        FROM {KB_TABLE} k
+                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
+                        ORDER BY MIN(k.upload_time) DESC
+                    """)
+                else:
+                    cur.execute(f"""
+                        SELECT
+                            k.file_name,
+                            COALESCE(k.original_name, t.original_name, k.file_name) AS original_name,
+                            k.file_path,
+                            COUNT(*)                                          AS total_chunks,
+                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                            MIN(k.upload_time)                                AS upload_time,
+                            MAX(k.update_time)                                AS last_update
+                        FROM {KB_TABLE} k
+                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                        WHERE k.uid = %s
+                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
+                        ORDER BY MIN(k.upload_time) DESC
+                    """, (uid,))
                 rows = cur.fetchall()
                 # 任务记录里的 save_name，用于区分"正在处理中"与"真孤儿"
                 cur.execute(f"SELECT save_name, status, created_at FROM {UPLOAD_TASKS_TABLE}")
@@ -629,25 +652,42 @@ async def kb_upload_status(current_user: TokenData = Depends(get_current_user)):
 
 
 @router.get("/kb/file/{file_name}/parents")
-async def kb_file_parents(file_name: str, _: TokenData = Depends(get_current_user)):
+async def kb_file_parents(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """返回指定文件的父块列表（internal_id='0' 的切片即为父块）。"""
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
+    uid = current_user.uid
+    is_admin = current_user.is_admin
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        chunk_index,
-                        group_id,
-                        child_content AS content,
-                        parent_content AS related_content,
-                        upload_time
-                    FROM {KB_TABLE}
-                    WHERE file_name = %s
-                      AND internal_id = '0'
-                    ORDER BY chunk_index ASC
-                """, (file_name,))
+                if is_admin:
+                    cur.execute(f"""
+                        SELECT
+                            chunk_index,
+                            group_id,
+                            child_content AS content,
+                            parent_content AS related_content,
+                            upload_time
+                        FROM {KB_TABLE}
+                        WHERE file_name = %s
+                          AND internal_id = '0'
+                        ORDER BY chunk_index ASC
+                    """, (file_name,))
+                else:
+                    cur.execute(f"""
+                        SELECT
+                            chunk_index,
+                            group_id,
+                            child_content AS content,
+                            parent_content AS related_content,
+                            upload_time
+                        FROM {KB_TABLE}
+                        WHERE file_name = %s
+                          AND internal_id = '0'
+                          AND uid = %s
+                        ORDER BY chunk_index ASC
+                    """, (file_name, uid))
                 rows = cur.fetchall()
 
         parents = [
@@ -667,7 +707,7 @@ async def kb_file_parents(file_name: str, _: TokenData = Depends(get_current_use
 
 
 @router.delete("/kb/file/{file_name}")
-async def kb_file_delete(file_name: str, _: TokenData = Depends(get_current_user)):
+async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """删除指定文件：清知识库切片（如有）+ 删上传任务记录（如有）+ 删磁盘物理文件（如有）。
 
     覆盖三类情形：
@@ -678,14 +718,19 @@ async def kb_file_delete(file_name: str, _: TokenData = Depends(get_current_user
     """
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
+    uid = current_user.uid
+    is_admin = current_user.is_admin
     deleted_chunks = 0
     deleted_tasks = 0
     disk_removed = False
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                # 1. 删知识库切片
-                cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
+                # 1. 删知识库切片（admin 可删任意文件，普通用户只能删自己的）
+                if is_admin:
+                    cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
+                else:
+                    cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s AND uid = %s", (file_name, uid))
                 deleted_chunks = cur.rowcount
                 # 2. 删上传任务记录（save_name 或 original_name 命中）
                 cur.execute(
@@ -718,7 +763,7 @@ async def kb_file_delete(file_name: str, _: TokenData = Depends(get_current_user
 
 
 @router.delete("/kb/task/{task_id}")
-async def kb_task_delete(task_id: str, _: TokenData = Depends(get_current_user)):
+async def kb_task_delete(task_id: str, current_user: TokenData = Depends(get_current_user)):
     """删除一条上传任务记录（主要用于清理 failed/cancelled 任务，让 Upload Status 区干净）。
 
     - 删任务记录；
@@ -779,7 +824,7 @@ async def kb_task_delete(task_id: str, _: TokenData = Depends(get_current_user))
 
 
 @router.post("/kb/task/{task_id}/cancel")
-async def kb_task_cancel(task_id: str, _: TokenData = Depends(get_current_user)):
+async def kb_task_cancel(task_id: str, current_user: TokenData = Depends(get_current_user)):
     """中止一个上传任务。
 
     - queued：直接删任务记录，立即生效（还没开始跑）；
@@ -890,7 +935,7 @@ class ParsedTextUpdate(BaseModel):
 
 
 @router.get("/kb/file/{file_name}/parsed-text")
-async def kb_file_parsed_text(file_name: str, _: TokenData = Depends(get_current_user)):
+async def kb_file_parsed_text(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """返回指定文件整篇解析结果（merged.md）文本，供前端查看/编辑。"""
     row = _kb_file_row(file_name)
     if not row:
@@ -907,7 +952,7 @@ async def kb_file_parsed_text(file_name: str, _: TokenData = Depends(get_current
 
 @router.put("/kb/file/{file_name}/parsed-text")
 async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
-                                     _: TokenData = Depends(get_current_user)):
+                                     current_user: TokenData = Depends(get_current_user)):
     """把编辑后的全文写回 merged.md（供之后重新切片入库）。"""
     row = _kb_file_row(file_name)
     if not row:

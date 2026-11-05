@@ -38,6 +38,8 @@ class ChunkOutput(BaseModel):
 class SemanticChunkOutput(BaseModel):
     """语义子块输出，`child_content` 为子块，`parent_content` 为父块原文。"""
     chunk_index: int = Field(description="切片索引，全局唯一")
+    uid: str = Field(default="", description="上传者 uid，用于用户隔离")
+    original_name: str = Field(default="", description="原始文件名，用于前端展示")
     child_content: str = Field(description="切片内容")
     file_path: str = Field(description="源文件路径")
     file_name: str = Field(description="源文件名")

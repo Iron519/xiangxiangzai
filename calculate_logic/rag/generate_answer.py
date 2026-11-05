@@ -574,8 +574,8 @@ async def node_faq_match(state: ChatState) -> ChatState:
 
 # ================= RAG节点 —— 检索知识库chunk =================
 retriever = PgHybridRetriever.from_env()
-async def do_retrieval(query: str) -> dict:
-    result = await retriever.search(query)
+async def do_retrieval(query: str, uid: str = "") -> dict:
+    result = await retriever.search(query, uid=uid)
     context = "\n".join([hit.parent_content for hit in result.final_results])
     sources = [
         {"file_name": hit.file_name, "content": hit.parent_content, "image_url": hit.image_url}
@@ -584,11 +584,12 @@ async def do_retrieval(query: str) -> dict:
     return context, sources
 
 async def node_retrieve(state: ChatState) -> ChatState:
-    query = state.get("query", "") 
-    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}'...")
+    query = state.get("query", "")
+    uid = (state.get("user") or {}).get("uid", "") if isinstance(state.get("user"), dict) else ""
+    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}' uid={uid}...")
 
     try:
-        context, sources = await do_retrieval(query)
+        context, sources = await do_retrieval(query, uid=uid)
     except Exception as e:
         logger.error(f"[Retrieve] 检索失败，返回空结果: {e}")
         context, sources = "", []
@@ -1251,21 +1252,22 @@ async def conversation_judgement(session_id: str = Body(...),
         return {"success": False, "error": "judgement 仅支持 like/dislike（空串表示取消）"}
     if turn_count < 1:
         return {"success": False, "error": "turn_count 必须为正整数"}
+    uid = current_user.uid
     try:
         with _pg_conn() as conn:
             if detail and judgement == "dislike":
                 cur = conn.execute(
                     f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
                     "SET user_judgement = NULLIF(%s, ''), judgement_detail = %s "
-                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
-                    (judgement, detail, session_id, turn_count),
+                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s AND uid = %s ",
+                    (judgement, detail, session_id, turn_count, uid),
                 )
             else:
                 cur = conn.execute(
                     f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
                     "SET user_judgement = NULLIF(%s, '') "
-                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s ",
-                    (judgement, session_id, turn_count),
+                    "WHERE session_id = %s AND role = 'assistant' AND turn_count = %s AND uid = %s ",
+                    (judgement, session_id, turn_count, uid),
                 )
             conn.commit()
         logger.info(f"[Judgement] 已记录反馈: session={session_id[:8]}... turn={turn_count} judgement='{judgement}' detail='{detail}' 受影响{cur.rowcount}行")

@@ -68,19 +68,19 @@ def register_user(username: str, password: str, apply_reason: str) -> dict:
     if not apply_reason:
         raise ValueError("请填写申请理由")
 
-    uid = username
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute(f"SELECT id FROM {USER_TABLE} WHERE uid=%s AND deleted=false", (uid,))
+        cur.execute(f"SELECT id FROM {USER_TABLE} WHERE username=%s AND deleted=false", (username,))
         if cur.fetchone():
             raise ValueError("该用户名已被注册")
+        # uid 由数据库序列自动生成（lpad(nextval('user_uid_seq'), 5, '0')）
         cur.execute(
-            f"INSERT INTO {USER_TABLE} (uid, username, password_hash, apply_reason, approved, remark, deleted) "
-            f"VALUES (%s,%s,%s,%s,false,'',false) RETURNING id, uid, username, approved",
-            (uid, username, _hash_password(password), apply_reason),
+            f"INSERT INTO {USER_TABLE} (username, password_hash, apply_reason, approved, remark, deleted) "
+            f"VALUES (%s,%s,%s,false,'',false) RETURNING id, uid, username, approved",
+            (username, _hash_password(password), apply_reason),
         )
         row = cur.fetchone()
         conn.commit()
-        logger.info(f"[Auth] 注册申请提交成功 username={username}, uid={uid}")
+        logger.info(f"[Auth] 注册申请提交成功 username={username}, uid={row['uid']}")
         return dict(row)
 
 
@@ -89,15 +89,14 @@ def verify_login(username: str, password: str) -> dict:
     if not username or not password:
         raise ValueError("用户名和密码不能为空")
 
-    uid = username
     with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute(f"SELECT * FROM {USER_TABLE} WHERE uid=%s AND deleted=false", (uid,))
+        cur.execute(f"SELECT * FROM {USER_TABLE} WHERE username=%s AND deleted=false", (username,))
         user = cur.fetchone()
         if not user or not _verify_password(password, user["password_hash"]):
             raise ValueError("用户名或密码错误")
         if not user["approved"]:
             raise ValueError("账号尚未批准，请等待管理员审核")
-        logger.info(f"[Auth] 登录成功 uid={uid}")
+        logger.info(f"[Auth] 登录成功 uid={user['uid']}, username={username}")
         return dict(user)
 
 
