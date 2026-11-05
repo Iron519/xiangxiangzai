@@ -577,124 +577,130 @@
     .chunk-related-content { display: none; margin-top: 8px; }
     .chunk-related-content.visible { display: block; }
 
-    /* ════════════ STATS DASHBOARD ════════════ */
-    .dashboard-header {
+    /* ════════════ STATS DASHBOARD (Figma Design) ════════════ */
+    .dm-page { padding: 24px 32px; max-width: 1200px; margin: 0 auto; }
+    .dm-header {
       display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 16px; padding: 16px 20px;
-      background: rgba(255,255,255,0.95); backdrop-filter: blur(8px); border-radius: 8px;
+      margin-bottom: 24px;
     }
-    .dashboard-title { font-size: 18px; font-weight: var(--fw-b); color: var(--c-text); white-space: nowrap; }
-    .dashboard-subtitle { font-size: 12px; color: var(--c-text-3); margin-left: 12px; }
+    .dm-header-left h1 {
+      font-size: 24px; font-weight: var(--fw-b); color: var(--c-text);
+      margin: 0; line-height: 1.3;
+    }
+    .dm-header-left p {
+      font-size: 12px; color: var(--c-text-3); margin: 4px 0 0;
+    }
+    .dm-header-right { display: flex; align-items: center; gap: 8px; position: relative; }
+    .dm-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 14px; border-radius: var(--r-sm); border: 1px solid var(--c-border);
+      background: var(--c-card); color: var(--c-text-2); font-size: 13px; font-weight: var(--fw-m);
+      font-family: var(--ff); cursor: pointer; transition: all var(--dur);
+    }
+    .dm-btn:hover { background: var(--c-secondary); border-color: var(--c-brand-light); }
+    .dm-btn svg { width: 14px; height: 14px; }
 
-    /* ── KPI Grid ── */
-    .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
-    .kpi-card {
-      display: flex; align-items: center; gap: 12px;
-      background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-      border-radius: 8px; padding: 16px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06); transition: box-shadow 0.2s;
+    /* ── KPI Cards (4 items) ── */
+    .dm-kpi-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;
     }
-    .kpi-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
-    .kpi-icon {
-      width: 40px; height: 40px; border-radius: 10px;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    .dm-kpi-card {
+      background: var(--c-card); border: 1px solid var(--c-border); border-radius: var(--r-md);
+      padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); transition: box-shadow 0.2s;
     }
-    .kpi-value { font-size: 22px; font-weight: var(--fw-b); line-height: 1.2; }
-    .kpi-label { font-size: 12px; color: var(--c-text-2); margin-top: 2px; white-space: nowrap; }
+    .dm-kpi-card:hover { box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+    .dm-kpi-value-row { display: flex; align-items: baseline; gap: 4px; margin-bottom: 6px; }
+    .dm-kpi-value {
+      font-family: var(--ff-mono); font-size: 28px; font-weight: var(--fw-s);
+      color: var(--c-text); line-height: 1; tabular-nums: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .dm-kpi-unit { font-size: 14px; color: var(--c-text-3); font-weight: var(--fw-n); }
+    .dm-kpi-label { font-size: 13px; color: var(--c-text-2); margin: 0; }
 
-    /* ── Mode Grid ── */
-    .mode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
-    .mode-card {
-      background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-      border-radius: 8px; padding: 16px 20px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    /* ── Card (shared) ── */
+    .dm-card {
+      background: var(--c-card); border: 1px solid var(--c-border); border-radius: var(--r-md);
+      padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    .mode-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-    .mode-badge {
-      display: inline-block; padding: 2px 10px; border-radius: 10px;
-      color: #fff; font-size: 13px; font-weight: var(--fw-s); white-space: nowrap;
-    }
-    .mode-session-count { font-size: 12px; color: var(--c-text-2); }
-    .mode-progress-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-    .mode-progress-bar {
-      flex: 1; height: 8px; background: var(--c-gray-1); border-radius: 4px; overflow: hidden;
-    }
-    .mode-progress-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
-    .mode-msg-count { font-size: 12px; color: var(--c-text-2); white-space: nowrap; }
-    .mode-duration { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--c-text-2); }
+    .dm-card-title { font-size: 16px; font-weight: var(--fw-s); color: var(--c-text); margin: 0; }
+    .dm-card-subtitle { font-size: 12px; color: var(--c-text-3); margin: 4px 0 0; }
 
-    /* ── Chart Cards ── */
-    .chart-row { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 16px; }
-    .chart-row.equal { grid-template-columns: 1fr 1fr; }
-    .chart-card {
-      background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-      border-radius: 8px; padding: 16px 20px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    /* ── Trend Chart Section ── */
+    .dm-trend-section { margin-bottom: 16px; }
+    .dm-trend-header {
+      display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;
     }
-    .chart-card.full { margin-bottom: 16px; }
-    .chart-card-header { margin-bottom: 8px; }
-    .chart-card-title { font-size: 14px; font-weight: var(--fw-s); color: var(--c-text); white-space: nowrap; }
-    .chart-container { width: 100%; height: 300px; position: relative; }
+    .dm-trend-tabs { display: flex; gap: 2px; background: var(--c-secondary); border-radius: var(--r-sm); padding: 2px; }
+    .dm-trend-tab {
+      padding: 6px 14px; border-radius: 6px; border: none; background: transparent;
+      color: var(--c-text-3); font-size: 12px; font-weight: var(--fw-m); font-family: var(--ff);
+      cursor: pointer; transition: all var(--dur); white-space: nowrap;
+    }
+    .dm-trend-tab.active { background: var(--c-card); color: var(--c-text); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+    .dm-trend-chart { width: 100%; height: 320px; position: relative; }
 
-    /* ── Date Range Picker ── */
-    .date-range-bar {
-      display: flex; align-items: center; gap: 10px; justify-content: flex-end;
-      background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-      border-radius: 8px; padding: 6px 12px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-    }
-    .date-range-bar input[type="date"] {
-      padding: 5px 10px; border: 1px solid var(--c-gray-3); border-radius: var(--r-sm);
-      font-size: 13px; font-family: var(--ff); color: var(--c-text);
-      background: var(--c-card); outline: none; transition: border-color var(--dur);
-    }
-    .date-range-bar input[type="date"]:focus { border-color: var(--c-brand); box-shadow: 0 0 0 2px rgba(var(--c-brand-rgb),0.12); }
-    .date-range-bar .date-sep { color: var(--c-text-3); font-size: 13px; }
-    .date-range-bar .date-apply-btn {
-      padding: 5px 16px; border-radius: var(--r-sm); border: none;
-      background: var(--c-brand); color: #fff; font-size: 13px; font-weight: var(--fw-m);
-      font-family: var(--ff); cursor: pointer; transition: background var(--dur); margin-left: auto;
-    }
-    .date-range-bar .date-apply-btn:hover { background: var(--c-brand-dark); }
+    /* ── Bottom Two-Card Grid ── */
+    .dm-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .dm-bottom-card { display: flex; flex-direction: column; min-height: 420px; }
 
-    /* ── Word Cloud ── */
-    .word-cloud {
-      display: flex; flex-wrap: wrap; align-content: center; justify-content: center;
-      gap: 8px 12px; padding: 16px; height: 340px;
-      line-height: 1.3; overflow: hidden;
+    /* ── Token Breakdown ── */
+    .dm-token-total-row { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
+    .dm-token-total-value { font-family: var(--ff-mono); font-size: 24px; font-weight: var(--fw-s); color: var(--c-text); }
+    .dm-token-total-unit { font-size: 12px; color: var(--c-text-3); }
+    .dm-token-total-desc { font-size: 11px; color: var(--c-text-3); margin: 0 0 12px; }
+    .dm-token-percent-badge {
+      display: inline-block; padding: 2px 8px; border-radius: var(--r-full);
+      background: var(--c-secondary); font-size: 10px; font-weight: var(--fw-m);
+      color: var(--c-text-3); margin-bottom: 12px;
     }
-    .word-cloud-tag {
-      display: inline-block; padding: 3px 10px; border-radius: var(--r-full);
-      cursor: default; transition: all 0.3s var(--ease); white-space: nowrap;
-      animation: wordFloat 3s ease-in-out infinite;
+    .dm-token-segment-bar {
+      display: flex; height: 12px; border-radius: var(--r-full); overflow: hidden;
+      background: var(--c-secondary); margin-bottom: 20px;
     }
-    .word-cloud-tag:hover { transform: scale(1.15); filter: brightness(1.1); }
-    .word-cloud-tag:nth-child(odd)  { animation-delay: -0.5s; }
-    .word-cloud-tag:nth-child(3n)   { animation-delay: -1.2s; }
-    .word-cloud-tag:nth-child(4n+1) { animation-delay: -1.8s; }
-    @keyframes wordFloat {
-      0%, 100% { transform: translateY(0); }
-      50% { transform: translateY(-4px); }
+    .dm-token-segment { height: 100%; transition: width 0.4s var(--ease); }
+    .dm-token-ranking { display: flex; flex-direction: column; gap: 16px; flex: 1; }
+    .dm-token-rank-item {
+      display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px;
     }
+    .dm-token-rank-num {
+      width: 28px; height: 28px; border-radius: 8px; background: var(--c-secondary);
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--ff-mono); font-size: 10px; font-weight: var(--fw-s); color: var(--c-text-3);
+    }
+    .dm-token-rank-info { min-width: 0; }
+    .dm-token-rank-name-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+    .dm-token-rank-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dm-token-rank-name { font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dm-token-rank-bar-wrap { height: 6px; border-radius: var(--r-full); background: var(--c-secondary); overflow: hidden; }
+    .dm-token-rank-bar { height: 100%; border-radius: var(--r-full); transition: width 0.4s var(--ease); }
+    .dm-token-rank-values { text-align: right; white-space: nowrap; }
+    .dm-token-rank-value { font-family: var(--ff-mono); font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); margin: 0; }
+    .dm-token-rank-percent { font-family: var(--ff-mono); font-size: 10px; color: var(--c-text-3); margin: 0; }
 
-    /* ── Negative Trend Badge ── */
-    .trend-badge {
-      display: inline-flex; align-items: center; gap: 4px;
-      padding: 2px 8px; border-radius: var(--r-full);
-      font-size: 12px; font-weight: var(--fw-m);
+    /* ── Negative Feedback Stats ── */
+    .dm-neg-stats-row {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+      border-radius: var(--r-md); background: var(--c-secondary); padding: 16px 0;
+      margin: 20px 0; border: 1px solid var(--c-border);
     }
-    .trend-badge.up { background: rgba(var(--c-rose-rgb),0.1); color: var(--c-rose); }
-    .trend-badge.down { background: rgba(var(--c-teal-rgb),0.1); color: var(--c-teal); }
-    .trend-badge.flat { background: var(--c-gray-1); color: var(--c-text-3); }
+    .dm-neg-stat-item { padding: 0 20px; }
+    .dm-neg-stat-item + .dm-neg-stat-item { border-left: 1px solid var(--c-border); }
+    .dm-neg-stat-label { font-size: 11px; color: var(--c-text-3); margin: 0; }
+    .dm-neg-stat-value-row { display: flex; align-items: baseline; gap: 4px; margin-top: 4px; }
+    .dm-neg-stat-value { font-family: var(--ff-mono); font-size: 24px; font-weight: var(--fw-s); color: var(--c-text); }
+    .dm-neg-stat-unit { font-size: 12px; color: var(--c-text-3); }
+    .dm-neg-reasons { display: flex; flex-direction: column; gap: 16px; flex: 1; justify-content: space-evenly; }
+    .dm-neg-reason-item { }
+    .dm-neg-reason-header { display: flex; align-items: center; margin-bottom: 8px; }
+    .dm-neg-reason-name { font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); }
+    .dm-neg-reason-count { font-family: var(--ff-mono); font-size: 11px; color: var(--c-text-3); margin-left: auto; }
+    .dm-neg-reason-percent { font-family: var(--ff-mono); font-size: 10px; color: var(--c-text-3); width: 32px; text-align: right; margin-left: 12px; }
+    .dm-neg-reason-bar-wrap { height: 6px; border-radius: var(--r-full); background: var(--c-secondary); overflow: hidden; }
+    .dm-neg-reason-bar { height: 100%; border-radius: var(--r-full); background: var(--c-text-2); transition: width 0.4s var(--ease); }
 
-    /* ── Sessions Table ── */
-    .stats-table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
-    .stats-table thead { background: var(--c-gray-1); }
-    .stats-table th { padding: 10px 16px; text-align: left; font-weight: var(--fw-m); color: var(--c-text-2); font-size: var(--fs-xs); }
-    .stats-table td { padding: 10px 16px; border-top: 1px solid var(--c-gray-2); }
-    .stats-table td.mono { font-family: var(--ff-mono); font-size: var(--fs-xs); }
-    .stats-table td.num { text-align: right; }
-    .session-tag { padding: 2px 8px; border-radius: var(--r-full); background: rgba(var(--c-brand-rgb),0.1); color: var(--c-brand); font-size: var(--fs-xs); font-weight: var(--fw-m); white-space: nowrap; }
+    /* ── Loading ── */
+    .dm-loading { text-align: center; padding: 80px 20px; color: var(--c-text-3); font-size: 14px; }
 
     /* ════════════ CHAT ════════════ */
     .chat-shell {
@@ -1232,79 +1238,73 @@
           </div>
         </div>
 
-        <!-- ─────────── 数据洞察 ─────────── -->
+        <!-- ─────────── 数据监控 (Figma Design) ─────────── -->
         <div class="page-panel" id="panel-stats">
           <div class="page-scroll" id="statsScrollWrapper">
-            <div style="padding:20px 24px 0">
-              <div id="statsLoading" style="text-align:center;padding:60px 20px;color:var(--c-text-3)">数据加载中...</div>
+            <div class="dm-page">
+              <div id="statsLoading" class="dm-loading">数据加载中...</div>
               <div id="statsContent" style="display:none">
 
-                <div class="dashboard-header">
-                  <div>
-                    <span class="dashboard-title">数据洞察</span>
-                    <span class="dashboard-subtitle" id="statsLastUpdated"></span>
+                <div class="dm-header">
+                  <div class="dm-header-left">
+                    <h1>数据监控</h1>
+                    <p id="statsLastUpdated">数据更新于 —</p>
                   </div>
-                  <div style="display:flex;align-items:center;gap:12px">
-                    <!-- Date Range Picker -->
-                    <div class="date-range-bar" id="dateRangeBar">
-                      <input type="date" id="statsDateFrom">
-                      <span class="date-sep">—</span>
-                      <input type="date" id="statsDateTo">
-                      <button class="date-apply-btn" id="dateApplyBtn">应用</button>
-                    </div>
-                    <button class="pending-refresh-btn" id="statsRefreshBtn">
-                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1-3M2 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <div class="dm-header-right">
+                    <button class="dm-btn" id="dmDateBtn">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6h12M5 1v3M11 1v3"/></svg>
+                      <span id="dmDateLabel">最近 7 天</span>
                     </button>
-                  </div>
-                </div>
-
-                <!-- KPI Cards: 4 items -->
-                <div class="kpi-grid" id="kpiGrid"></div>
-
-                <!-- Row 1: Message Trend + Token Usage Trend (two bar charts, side by side) -->
-                <div class="chart-row equal" style="margin-bottom:16px">
-                  <div class="chart-card">
-                    <div class="chart-card-header"><span class="chart-card-title">每日消息趋势</span></div>
-                    <div class="chart-container" style="height:320px"><canvas id="chartMsgTrend"></canvas></div>
-                  </div>
-                  <div class="chart-card">
-                    <div class="chart-card-header"><span class="chart-card-title">每日Token使用趋势</span></div>
-                    <div class="chart-container" style="height:320px"><canvas id="chartTokTrend"></canvas></div>
-                  </div>
-                </div>
-
-                <!-- Row 2: Topic Tags Rose + Hot Topics Cloud -->
-                <div class="chart-row equal" style="margin-bottom:16px">
-                  <div class="chart-card">
-                    <div class="chart-card-header"><span class="chart-card-title">话题标签分布</span></div>
-                    <div class="chart-container" style="height:340px"><canvas id="chartTag"></canvas></div>
-                  </div>
-                  <div class="chart-card">
-                    <div class="chart-card-header">
-                      <span class="chart-card-title">近期热门话题</span>
-                      <span class="dashboard-subtitle" style="margin-left:8px;font-size:11px;color:var(--c-text-3)">上升趋势</span>
+                    <button class="dm-btn" id="statsRefreshBtn">
+                      <svg viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1-3M2 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      刷新数据
+                    </button>
+                    <button class="dm-btn" id="dmExportBtn">
+                      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1v9m0 0l-3-3m3 3l3-3M2 11v3a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-3"/></svg>
+                      导出数据
+                    </button>
+                    <div id="dmDatePicker" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--c-card);border:1px solid var(--c-border);border-radius:var(--r-sm);padding:12px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:100">
+                      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                        <input type="date" id="statsDateFrom" style="padding:5px 10px;border:1px solid var(--c-gray-3);border-radius:6px;font-size:13px;font-family:var(--ff);color:var(--c-text);background:var(--c-card);outline:none">
+                        <span style="color:var(--c-text-3);font-size:13px">—</span>
+                        <input type="date" id="statsDateTo" style="padding:5px 10px;border:1px solid var(--c-gray-3);border-radius:6px;font-size:13px;font-family:var(--ff);color:var(--c-text);background:var(--c-card);outline:none">
+                      </div>
+                      <button id="dateApplyBtn" style="width:100%;padding:6px;border-radius:6px;border:none;background:var(--c-brand);color:#fff;font-size:13px;font-weight:var(--fw-m);font-family:var(--ff);cursor:pointer">应用</button>
                     </div>
-                    <div id="hotTopicsCloud" class="word-cloud"></div>
                   </div>
                 </div>
 
-                <!-- Row 3: Emotion Pie + Negative Trend -->
-                <div class="chart-row equal" style="margin-bottom:16px">
-                  <div class="chart-card">
-                    <div class="chart-card-header">
-                      <span class="chart-card-title">情感分布</span>
-                      <span id="emotionSummary" class="dashboard-subtitle" style="margin-left:8px"></span>
+                <div class="dm-kpi-grid" id="kpiGrid"></div>
+
+                <div class="dm-card dm-trend-section" style="margin-bottom:16px">
+                  <div class="dm-trend-header">
+                    <div>
+                      <h2 class="dm-card-title">使用趋势</h2>
+                      <p class="dm-card-subtitle">每日数据变化与增长情况</p>
                     </div>
-                    <div class="chart-container" style="height:300px"><canvas id="chartEmotion"></canvas></div>
+                    <div class="dm-trend-tabs" id="dmTrendTabs">
+                      <button class="dm-trend-tab active" data-metric="users">使用人数</button>
+                      <button class="dm-trend-tab" data-metric="messages">问答条数</button>
+                      <button class="dm-trend-tab" data-metric="tokens">Token 消耗</button>
+                      <button class="dm-trend-tab" data-metric="duration">平均耗时</button>
+                    </div>
                   </div>
-                  <div class="chart-card">
-                    <div class="chart-card-header">
-                      <span class="chart-card-title">负面趋势</span>
-                      <span id="negativeTrendBadge" class="trend-badge flat" style="margin-left:8px"></span>
-                    </div>
-                    <div class="chart-container" style="height:300px"><canvas id="chartNegative"></canvas></div>
+                  <div class="dm-trend-chart"><canvas id="chartTrend"></canvas></div>
+                </div>
+
+                <div class="dm-bottom-grid">
+                  <div class="dm-card dm-bottom-card">
+                    <h2 class="dm-card-title">模型 Token 构成</h2>
+                    <p class="dm-card-subtitle">按模型品类统计本周期消耗</p>
+                    <div id="dmTokenBreakdown" style="flex:1;display:flex;flex-direction:column;margin-top:16px"></div>
+                  </div>
+                  <div class="dm-card dm-bottom-card">
+                    <h2 class="dm-card-title">负反馈统计</h2>
+                    <p class="dm-card-subtitle">用户点踩及原因分布</p>
+                    <div id="dmNegativeFeedback" style="flex:1;display:flex;flex-direction:column"></div>
                   </div>
                 </div>
+
               </div>
             </div>
           </div>
@@ -3237,26 +3237,14 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     document.getElementById('sourceModal').style.display = 'none';
   }
 
-  // ==================== 数据洞察 ====================
-  const CHART_COLORS = ['#526b79','#687780','#f59e0b','#d4183d','#8b5cf6','#06b6d4','#f97316','#ec4899','#22d3ee','#a78bfa'];
-  const KPI_COLORS = [
-    { bg:'#f0f9eb', color:'#67C22A' },
-    { bg:'#fdf6ec', color:'#E6A23C' },
-    { bg:'#fef0f0', color:'#F56C6C' },
-    { bg:'#f5f3ff', color:'#8B5CF6' },
-  ];
-  const KPI_SVGS = [
-    '<path d="M10 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM4 17c0-3 2.7-5 6-5s6 2 6 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
-    '<path d="M3 5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H8l-4 3v-3H5a2 2 0 0 1-2-2V5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 8h6M7 11h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
-    '<path d="M10 3v12M6 5h5a2 2 0 1 1 0 4H8a2 2 0 1 0 0 4h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
-    '<circle cx="9" cy="9" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M9 5v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
-  ];
+  // ==================== 数据监控 (Figma Design) ====================
+  const DM_COLORS = ['#526b79','#687780','#f59e0b','#d4183d','#8b5cf6','#06b6d4','#f97316','#ec4899','#22d3ee','#a78bfa'];
   let statsCharts = {};
   let _statsData = null;
+  let _currentTrendMetric = 'users';
 
   function destroyStatsCharts() { Object.values(statsCharts).forEach(c => { if (c) c.destroy(); }); statsCharts = {}; }
 
-  // ── Date Range Picker Logic ──
   function initDatePicker() {
     const now = new Date();
     const fmt = d => d.toISOString().slice(0,10);
@@ -3267,7 +3255,25 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     fromEl.value = fmt(from);
     toEl.value = fmt(now);
 
+    const dateBtn = document.getElementById('dmDateBtn');
+    const datePicker = document.getElementById('dmDatePicker');
+    if (dateBtn && datePicker) {
+      dateBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        datePicker.style.display = datePicker.style.display === 'none' ? 'block' : 'none';
+      });
+      document.addEventListener('click', (e) => {
+        if (!datePicker.contains(e.target) && e.target !== dateBtn) datePicker.style.display = 'none';
+      });
+    }
     document.getElementById('dateApplyBtn').addEventListener('click', () => {
+      const fromV = fromEl.value;
+      const toV = toEl.value;
+      const label = document.getElementById('dmDateLabel');
+      if (fromV && toV) label.textContent = `${fromV} — ${toV}`;
+      else if (toV) label.textContent = `截至 ${toV}`;
+      else label.textContent = '最近 7 天';
+      if (datePicker) datePicker.style.display = 'none';
       loadStats();
     });
   }
@@ -3281,39 +3287,211 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     return params.toString();
   }
 
-  // ── Rose Chart Colors ──
-  const ROSE_PALETTE = [
-    '#526b79','#687780','#f59e0b','#d4183d','#8b5cf6',
-    '#06b6d4','#f97316','#ec4899','#22d3ee','#a78bfa',
-    '#34d399','#fbbf24','#fb7185','#c084fc','#2dd4bf',
-  ];
-
-  // ── Word Cloud Renderer ──
-  function renderWordCloud(containerId, topics) {
-    const el = document.getElementById(containerId);
-    if (!topics || !topics.length) {
-      el.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:40px 0;font-size:13px">暂无话题数据</div>';
-      return;
-    }
-    const maxVal = Math.max(...topics.map(t => t.value || t.count || 1));
-    const fontMin = 12, fontMax = 28;
-    const rotations = [0, -15, 15, -8, 8, 0, -20, 20];
-    el.innerHTML = topics.map((t, i) => {
-      const val = t.value || t.count || 1;
-      const ratio = val / maxVal;
-      const fontSize = fontMin + (fontMax - fontMin) * Math.pow(ratio, 0.6);
-      const colorIdx = i % ROSE_PALETTE.length;
-      const bgAlpha = 0.08 + ratio * 0.15;
-      const rot = rotations[i % rotations.length];
-      return `<span class="word-cloud-tag" style="font-size:${fontSize.toFixed(1)}px;color:${ROSE_PALETTE[colorIdx]};background:rgba(${hexToRgb(ROSE_PALETTE[colorIdx])},${bgAlpha});transform:rotate(${rot}deg);animation-delay:${(i*0.3).toFixed(1)}s" title="${escapeHtml(t.name)}: ${val}">${escapeHtml(t.name)}</span>`;
-    }).join('');
+  function fmtCompact(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(2);
+    if (n >= 1e4) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
   }
 
-  function hexToRgb(hex) {
-    const r = parseInt(hex.slice(1,3),16);
-    const g = parseInt(hex.slice(3,5),16);
-    const b = parseInt(hex.slice(5,7),16);
-    return `${r},${g},${b}`;
+  function fmtTokenCompact(n) {
+    n = Number(n) || 0;
+    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return String(n);
+  }
+
+  function renderKPI(data) {
+    const t = data.total_stats || {};
+    const kpiItems = [
+      { value: (t.total_users || 0).toLocaleString(), unit: '人', label: '使用人数' },
+      { value: (t.total_messages || 0).toLocaleString(), unit: '条', label: '问答条数' },
+      { value: fmtCompact(t.total_tokens), unit: t.total_tokens >= 1e6 ? 'M' : '', label: 'Token消耗' },
+      { value: ((t.avg_duration_ms||0)/1000).toFixed(1), unit: '秒', label: '平均耗时' },
+    ];
+    document.getElementById('kpiGrid').innerHTML = kpiItems.map(item => `
+      <div class="dm-kpi-card">
+        <div class="dm-kpi-value-row">
+          <span class="dm-kpi-value">${item.value}</span>
+          ${item.unit ? `<span class="dm-kpi-unit">${item.unit}</span>` : ''}
+        </div>
+        <p class="dm-kpi-label">${item.label}</p>
+      </div>
+    `).join('');
+  }
+
+  function renderTrendChart(data) {
+    const dailyData = data.daily_stats || [];
+    const labels = dailyData.map(d => d.date.slice(5));
+    let values, label, color;
+
+    switch (_currentTrendMetric) {
+      case 'messages':
+        values = dailyData.map(d => d.message_count || 0);
+        label = '问答条数';
+        color = '#526b79';
+        break;
+      case 'tokens':
+        values = dailyData.map(d => d.total_tokens || 0);
+        label = 'Token 消耗';
+        color = '#f59e0b';
+        break;
+      case 'duration':
+        values = dailyData.map(d => ((d.avg_duration_ms || 0) / 1000));
+        label = '平均耗时 (秒)';
+        color = '#8b5cf6';
+        break;
+      default:
+        values = dailyData.map(d => d.user_count || 0);
+        label = '使用人数';
+        color = '#526b79';
+    }
+
+    const canvas = document.getElementById('chartTrend');
+    if (!canvas) return;
+    if (statsCharts.trend) statsCharts.trend.destroy();
+
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 320);
+    gradient.addColorStop(0, color + '33');
+    gradient.addColorStop(1, color + '03');
+
+    statsCharts.trend = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label, data: values,
+          borderColor: color, borderWidth: 2.5,
+          backgroundColor: gradient, fill: true,
+          tension: 0.35, pointRadius: 3,
+          pointBackgroundColor: color,
+          pointBorderColor: '#fff', pointBorderWidth: 1.5,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: 'rgba(40,52,59,0.9)', titleColor: '#fff', bodyColor: '#fff',
+            borderColor: color, borderWidth: 1, padding: 10, displayColors: false,
+            callbacks: {
+              label: ctx => ` ${label}: ${ctx.parsed.y.toLocaleString()}`
+            }
+          }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: 'var(--c-text-3)', font: { size: 11 } } },
+          y: {
+            beginAtZero: true,
+            grid: { color: 'rgba(55,77,89,0.06)' },
+            ticks: { color: '#687780', font: { size: 11 }, callback: v => v >= 1000 ? (v/1000)+'K' : v }
+          }
+        }
+      }
+    });
+  }
+
+  function renderTokenBreakdown(data) {
+    const container = document.getElementById('dmTokenBreakdown');
+    if (!container) return;
+    const breakdown = data.model_token_breakdown || [];
+    const totalTokens = breakdown.reduce((a, b) => a + (b.total_tokens || 0), 0);
+
+    if (!breakdown.length || totalTokens === 0) {
+      container.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:60px 0;font-size:13px">暂无Token消耗数据</div>';
+      return;
+    }
+
+    let html = `
+      <div class="dm-token-total-row">
+        <span class="dm-token-total-value">${fmtTokenCompact(totalTokens)}</span>
+        <span class="dm-token-total-unit">Token</span>
+      </div>
+      <p class="dm-token-total-desc">${breakdown.length} 个模型，本周期总消耗</p>
+      <span class="dm-token-percent-badge">100%</span>
+      <div class="dm-token-segment-bar">
+    `;
+    breakdown.forEach((item, i) => {
+      const pct = (item.total_tokens / totalTokens * 100);
+      const color = DM_COLORS[i % DM_COLORS.length];
+      html += `<div class="dm-token-segment" style="width:${pct}%;background:${color}" title="${item.model}: ${fmtTokenCompact(item.total_tokens)} (${pct.toFixed(1)}%)"></div>`;
+    });
+    html += `</div><div class="dm-token-ranking">`;
+
+    breakdown.forEach((item, i) => {
+      const pct = (item.total_tokens / totalTokens * 100);
+      const color = DM_COLORS[i % DM_COLORS.length];
+      html += `
+        <div class="dm-token-rank-item">
+          <span class="dm-token-rank-num">${String(i + 1).padStart(2, '0')}</span>
+          <div class="dm-token-rank-info">
+            <div class="dm-token-rank-name-row">
+              <span class="dm-token-rank-dot" style="background:${color}"></span>
+              <span class="dm-token-rank-name">${item.model}</span>
+            </div>
+            <div class="dm-token-rank-bar-wrap">
+              <div class="dm-token-rank-bar" style="width:${pct}%;background:${color}"></div>
+            </div>
+          </div>
+          <div class="dm-token-rank-values">
+            <p class="dm-token-rank-value">${fmtTokenCompact(item.total_tokens)}</p>
+            <p class="dm-token-rank-percent">${pct.toFixed(0)}%</p>
+          </div>
+        </div>
+      `;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+  }
+
+  function renderNegativeFeedback(data) {
+    const container = document.getElementById('dmNegativeFeedback');
+    if (!container) return;
+    const fb = data.negative_feedback || {};
+
+    let html = `
+      <div class="dm-neg-stats-row">
+        <div class="dm-neg-stat-item">
+          <p class="dm-neg-stat-label">点踩总数</p>
+          <div class="dm-neg-stat-value-row">
+            <span class="dm-neg-stat-value">${(fb.dislike_count || 0).toLocaleString()}</span>
+            <span class="dm-neg-stat-unit">次</span>
+          </div>
+        </div>
+        <div class="dm-neg-stat-item">
+          <p class="dm-neg-stat-label">占全部对话</p>
+          <div class="dm-neg-stat-value-row">
+            <span class="dm-neg-stat-value">${(fb.dislike_percent || 0).toFixed(2)}</span>
+            <span class="dm-neg-stat-unit">%</span>
+          </div>
+        </div>
+      </div>
+      <div class="dm-neg-reasons">
+    `;
+
+    const reasons = fb.reasons || [];
+    if (reasons.length === 0) {
+      html += '<div style="text-align:center;color:var(--c-text-3);padding:40px 0;font-size:13px">暂无负反馈数据</div>';
+    } else {
+      reasons.forEach(r => {
+        html += `
+          <div class="dm-neg-reason-item">
+            <div class="dm-neg-reason-header">
+              <span class="dm-neg-reason-name">${r.reason}</span>
+              <span class="dm-neg-reason-count">${r.count} 次</span>
+              <span class="dm-neg-reason-percent">${r.percent}%</span>
+            </div>
+            <div class="dm-neg-reason-bar-wrap">
+              <div class="dm-neg-reason-bar" style="width:${r.percent}%"></div>
+            </div>
+          </div>
+        `;
+      });
+    }
+    html += `</div>`;
+    container.innerHTML = html;
   }
 
   async function loadStats() {
@@ -3330,269 +3508,44 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       destroyStatsCharts();
       _statsData = data;
 
-      // ── KPI: 5 items ──
-      const t = data.total_stats || {};
-      const fmtCompact = n => {
-        n = Number(n) || 0;
-        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-        if (n >= 1e4) return (n / 1e3).toFixed(0) + 'K';
-        return String(n);
-      };
-      const kpiItems = [
-        { label:'总用户数', value:t.total_users || 0 },
-        { label:'总消息数', value:t.total_messages || 0 },
-        { label:'总Token数', value:fmtCompact(t.total_tokens) },
-        { label:'平均响应时间', value:((t.avg_duration_ms||0)/1000).toFixed(1)+'s' },
-      ];
-      const kpiEl = document.getElementById('kpiGrid');
-      if (kpiEl) kpiEl.innerHTML = kpiItems.map((item, i) => `
-        <div class="kpi-card">
-          <div class="kpi-icon" style="background:${KPI_COLORS[i].bg}">
-            <svg width="20" height="20" viewBox="0 0 18 18" fill="none" style="color:${KPI_COLORS[i].color}">${KPI_SVGS[i]}</svg>
-          </div>
-          <div>
-            <div class="kpi-value" style="color:${KPI_COLORS[i].color}">${item.value}</div>
-            <div class="kpi-label">${item.label}</div>
-          </div>
-        </div>
-      `).join('');
-
-      // ── Combo Chart: Message (line) + Tokens (bar) ──
-      const dailyData = data.daily_stats || [];
-      // Merge by date: 消息量与 token 消耗均来自 daily_stats
-      const dateMap = {};
-      dailyData.forEach(d => { dateMap[d.date] = { date:d.date, msgs:d.message_count, toks:0 }; });
-      dailyData.forEach(d => { if (dateMap[d.date]) dateMap[d.date].toks = d.total_tokens || 0; });
-      const merged = Object.values(dateMap).sort((a,b) => a.date.localeCompare(b.date));
-
-      const msgCanvas = document.getElementById('chartMsgTrend');
-      if (msgCanvas) {
-        statsCharts.msg = new Chart(msgCanvas, {
-          type: 'bar',
-          data: {
-            labels: merged.map(d => d.date.slice(5)),
-            datasets: [{
-              label: '消息数量', data: merged.map(d => d.msgs),
-              backgroundColor: 'rgba(230,162,60,0.55)', borderColor: '#E6A23C',
-              borderWidth: 1, borderRadius: 4, barPercentage: 0.55,
-            }],
-          },
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { labels: { font: { size: 12 }, usePointStyle: true, padding: 16 } } },
-            scales: {
-              x: { grid: { display: false } },
-              y: {
-                beginAtZero: true, grid: { color: 'rgba(55,77,89,0.10)' },
-                title: { display: true, text: '消息数', color: '#E6A23C', font: { size: 12 } },
-                ticks: { color: '#E6A23C' },
-              },
-            },
-          },
-        });
-      }
-
-      const tokCanvas = document.getElementById('chartTokTrend');
-      if (tokCanvas) {
-        statsCharts.tok = new Chart(tokCanvas, {
-          type: 'bar',
-          data: {
-            labels: merged.map(d => d.date.slice(5)),
-            datasets: [{
-              label: 'Token使用量', data: merged.map(d => d.toks),
-              backgroundColor: 'rgba(245,108,108,0.55)', borderColor: '#F56C6C',
-              borderWidth: 1, borderRadius: 4, barPercentage: 0.55,
-            }],
-          },
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { labels: { font: { size: 12 }, usePointStyle: true, padding: 16 } } },
-            scales: {
-              x: { grid: { display: false } },
-              y: {
-                beginAtZero: true, grid: { color: 'rgba(55,77,89,0.10)' },
-                title: { display: true, text: 'Token数', color: '#F56C6C', font: { size: 12 } },
-                ticks: { color: '#F56C6C', callback: v => (v >= 1000 ? (v/1000) + 'K' : v) },
-              },
-            },
-          },
-        });
-      }
-
-      // ── Topic Tags: Polar/Rose Chart (80% cumulative) ──
-      const rawTags = data.tag_distribution || [];
-      const totalTagVal = rawTags.reduce((a,b) => a + (b.value||0), 0) || 1;
-      let cumPct = 0;
-      const filteredTags = [];
-      for (const t of rawTags) {
-        cumPct += (t.value || 0) / totalTagVal;
-        filteredTags.push(t);
-        if (cumPct >= 0.80) break;
-      }
-      if (rawTags.length > filteredTags.length) {
-        const otherVal = rawTags.slice(filteredTags.length).reduce((a,b) => a + (b.value||0), 0);
-        if (otherVal > 0) filteredTags.push({ name: '其他', value: otherVal });
-      }
-      const roseData = filteredTags;
-
-      const tagCanvas = document.getElementById('chartTag');
-      if (tagCanvas) {
-        statsCharts.tag = new Chart(tagCanvas, {
-        type: 'polarArea',
-        data: {
-          labels: roseData.map(d => d.name),
-          datasets: [{
-            data: roseData.map(d => d.value),
-            backgroundColor: roseData.map((_,i) => {
-              const c = ROSE_PALETTE[i % ROSE_PALETTE.length];
-              return c + '99';
-            }),
-            borderColor: roseData.map((_,i) => ROSE_PALETTE[i % ROSE_PALETTE.length]),
-            borderWidth: 1.5,
-          }]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: {
-            legend: { position: 'right', labels: { font: { size: 11 }, padding: 8, usePointStyle: true } },
-            tooltip: {
-              callbacks: {
-                label: ctx => {
-                  const v = ctx.parsed.r;
-                  const pct = (v / totalTagVal * 100).toFixed(1);
-                  return ` ${ctx.label}: ${v} (${pct}%)`;
-                }
-              }
-            }
-          },
-          scales: { r: { ticks: { display: false }, grid: { color: 'rgba(55,77,89,0.10)' } } },
-        }
-        });
-      }
-
-      // ── Hot Topics Cloud ──
-      const hotTopics = (data.hot_topics || data.trending_topics || rawTags.slice(0, 12)).map(t => ({ name: t.name, value: t.value || t.count || t.score || 1 }));
-      renderWordCloud('hotTopicsCloud', hotTopics);
-
-      // ── Emotion: Pie Chart ──
-      const emotionColorsMap = {'积极':'#67C23A','紧急':'#F56C6C','消极':'#ef4444','中性':'#409EFF','未标注':'#A0522D','积极':'#67C23A','紧急':'#F56C6C','消极':'#ef4444','中性':'#409EFF','未标注':'#A0522D'};
-      const emotionLabel = {'积极':'积极','紧急':'紧急','消极':'消极','中性':'中性','未标注':'未标注'};
-      const emotionEn = n => emotionLabel[n] || n;
-      const emotionData = data.emotion_distribution || [];
-      const totalEmo = emotionData.reduce((a,b) => a + (b.value||0), 0) || 1;
-      const emotionCanvas = document.getElementById('chartEmotion');
-      if (emotionCanvas) {
-        statsCharts.emotion = new Chart(emotionCanvas, {
-        type: 'pie',
-        data: {
-          labels: emotionData.map(d => emotionEn(d.name)),
-          datasets: [{
-            data: emotionData.map(d => d.value),
-            backgroundColor: emotionData.map(d => emotionColorsMap[d.name] || '#909399'),
-            borderWidth: 2, borderColor: '#fff',
-          }]
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          plugins: {
-            legend: { position: 'bottom', labels: { font: { size: 12 }, padding: 12, usePointStyle: true } },
-            tooltip: {
-              callbacks: {
-                label: ctx => {
-                  const v = ctx.parsed;
-                  const pct = (v / totalEmo * 100).toFixed(1);
-                  return ` ${ctx.label}: ${v} (${pct}%)`;
-                }
-              }
-            }
-          },
-        }
-        });
-      }
-
-      // Emotion summary text
-      const negNames = ['消极','Negative Urgent','消极','紧急','紧急'];
-      const negTotal = emotionData.filter(d => negNames.includes(d.name)).reduce((a,b) => a + (b.value||0), 0);
-      const negPct = totalEmo > 0 ? (negTotal / totalEmo * 100).toFixed(1) : '0.0';
-      const emoSummaryEl = document.getElementById('emotionSummary');
-      if (emoSummaryEl) emoSummaryEl.textContent = `负面/紧急: ${negPct}%`;
-
-      // ── Negative Trend Line Chart ──
-      const negTrendData = data.negative_trend || [];
-      const negCanvas = document.getElementById('chartNegative');
-      const negFallbackEl = document.getElementById('negTrendFallback');
-      if (negFallbackEl) negFallbackEl.style.display = 'none';
-      if (negTrendData.length && negCanvas) {
-        const negativeCounts = negTrendData.map(d => d.negative_count || 0);
-        const urgentCounts = negTrendData.map(d => d.urgent_count || 0);
-        const totalNeg = negativeCounts.reduce((a, b) => a + b, 0);
-        const totalUrg = urgentCounts.reduce((a, b) => a + b, 0);
-        const totalAll = negTrendData.reduce((a, d) => a + (d.total_negative || 0), 0);
-        
-        const recentTotal = negTrendData.length >= 2 ? (negTrendData[negTrendData.length - 1].total_negative || 0) : 0;
-        const prevTotal = negTrendData.length >= 2 ? (negTrendData[negTrendData.length - 2].total_negative || 0) : recentTotal;
-        const trend = recentTotal > prevTotal + 0.5 ? 'up' : recentTotal < prevTotal - 0.5 ? 'down' : 'flat';
-        const badge = document.getElementById('negativeTrendBadge');
-        if (badge) {
-          badge.className = 'trend-badge ' + trend;
-          badge.textContent = trend === 'up' ? '↑ 上升' : trend === 'down' ? '↓ 下降' : '→ 稳定';
-        }
-
-        statsCharts.negative = new Chart(negCanvas, {
-          type: 'line',
-          data: {
-            labels: negTrendData.map(d => (d.date || '').slice(5)),
-            datasets: [
-              {
-                label: '消极', data: negativeCounts,
-                borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.15)',
-                fill: true, tension: 0.35, pointRadius: 4,
-                pointBackgroundColor: '#ef4444', borderWidth: 2.5,
-              },
-              {
-                label: '紧急', data: urgentCounts,
-                borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.15)',
-                fill: true, tension: 0.35, pointRadius: 4,
-                pointBackgroundColor: '#f59e0b', borderWidth: 2.5,
-              }
-            ]
-          },
-          options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { labels: { font: { size: 12 }, usePointStyle: true } } },
-            scales: {
-              x: { grid: { display: false } },
-              y: { beginAtZero: true, grid: { color: 'rgba(55,77,89,0.10)' },
-                title: { display: true, text: '数量', color: '#ef4444', font: { size: 12 } } },
-            }
-          }
-        });
-      } else if (negCanvas) {
-        negCanvas.style.display = 'none';
-        let negFallback = document.getElementById('negTrendFallback');
-        if (!negFallback) {
-          negFallback = document.createElement('div');
-          negFallback.id = 'negTrendFallback';
-          negFallback.style.cssText = 'text-align:center;padding:80px 0;color:var(--c-text-3);font-size:13px';
-          negCanvas.parentElement.appendChild(negFallback);
-        }
-        negFallback.style.display = '';
-        negFallback.textContent = '暂无负面趋势数据';
-      }
+      renderKPI(data);
+      renderTrendChart(data);
+      renderTokenBreakdown(data);
+      renderNegativeFeedback(data);
 
       const lastUpdatedEl = document.getElementById('statsLastUpdated');
-      if (lastUpdatedEl) lastUpdatedEl.textContent = `更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+      if (lastUpdatedEl) lastUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
       if (loading) loading.style.display = 'none';
       if (content) content.style.display = '';
     } catch (err) {
       console.error('[loadStats]', err);
-      if (loading) { loading.innerHTML = `加载失败：${err.message}`; loading.style.display = ''; }
+      if (loading) { loading.textContent = `加载失败：${err.message}`; loading.style.display = ''; }
       if (content) content.style.display = 'none';
     }
   }
 
   initDatePicker();
   document.getElementById('statsRefreshBtn').addEventListener('click', loadStats);
+
+  document.getElementById('dmTrendTabs').addEventListener('click', (e) => {
+    const tab = e.target.closest('.dm-trend-tab');
+    if (!tab) return;
+    document.querySelectorAll('.dm-trend-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    _currentTrendMetric = tab.dataset.metric;
+    if (_statsData) renderTrendChart(_statsData);
+  });
+
+  document.getElementById('dmExportBtn').addEventListener('click', () => {
+    if (!_statsData) return;
+    const blob = new Blob([JSON.stringify(_statsData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `stats_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
 
   // 用户菜单：三点按钮 + 下拉
   const _userMenu = document.getElementById('sidebarUserMenu');

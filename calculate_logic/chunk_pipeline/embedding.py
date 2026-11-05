@@ -140,6 +140,8 @@ def _parse_timestamp(value: str | None) -> datetime | None:
 def _to_record(chunk: SemanticChunkOutput) -> dict[str, Any]:
     return {
         "chunk_index": chunk.chunk_index,
+        "uid": chunk.uid,
+        "original_name": chunk.original_name,
         "child_content": chunk.child_content,
         "file_path": chunk.file_path,
         "file_name": chunk.file_name,

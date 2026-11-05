@@ -340,6 +340,83 @@ def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: 
         return []
 
 
+def get_model_token_breakdown(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
+    """按模型(mode)统计Token消耗分布（用于模型Token构成排行榜）。"""
+    try:
+        conds, range_params = _range_conds(start_date, end_date)
+        conds.append("role = 'assistant'")
+        conds.append("mode IS NOT NULL AND mode != ''")
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        mode,
+                        COALESCE(SUM(total_token), 0)     AS total_tokens,
+                        COUNT(*)                           AS message_count
+                    FROM {CONV_TABLE}
+                    WHERE {' AND '.join(conds)}
+                    GROUP BY mode
+                    ORDER BY total_tokens DESC
+                """, range_params)
+                rows = cur.fetchall()
+        return [
+            {
+                "model": row[0],
+                "total_tokens": int(row[1]),
+                "message_count": row[2],
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        logger.error(f"[GetModelTokenBreakdown] 查询失败: {e}")
+        return []
+
+
+def get_negative_feedback_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> dict:
+    """负反馈统计：点踩总数、占比、原因分布。"""
+    try:
+        conds, range_params = _range_conds(start_date, end_date)
+        conds.append("role = 'assistant'")
+        with _pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(*)                                           AS total_assistant,
+                        COUNT(*) FILTER (WHERE user_judgement = 'dislike') AS dislike_count
+                    FROM {CONV_TABLE}
+                    WHERE {' AND '.join(conds)}
+                """, range_params)
+                row = cur.fetchone()
+                total_assistant = row[0] or 0
+                dislike_count = row[1] or 0
+
+                cur.execute(f"""
+                    SELECT
+                        COALESCE(NULLIF(TRIM(judgement_detail), ''), '其他原因') AS reason,
+                        COUNT(*)                                                AS count
+                    FROM {CONV_TABLE}
+                    WHERE {' AND '.join(conds)} AND user_judgement = 'dislike'
+                    GROUP BY reason
+                    ORDER BY count DESC
+                """, range_params)
+                reason_rows = cur.fetchall()
+
+        reasons = [{"reason": r[0], "count": r[1]} for r in reason_rows]
+        total_reasons = sum(r["count"] for r in reasons) or 1
+        for r in reasons:
+            r["percent"] = round(r["count"] / total_reasons * 100, 1)
+
+        return {
+            "dislike_count": dislike_count,
+            "total_assistant": total_assistant,
+            "dislike_percent": round(dislike_count / total_assistant * 100, 2) if total_assistant > 0 else 0,
+            "reasons": reasons,
+        }
+    except Exception as e:
+        logger.error(f"[GetNegativeFeedbackStats] 查询失败: {e}")
+        return {"dislike_count": 0, "total_assistant": 0, "dislike_percent": 0, "reasons": []}
+
+
 def get_hourly_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """按小时分布（用于折线/柱状图）。"""
     try:
@@ -403,24 +480,6 @@ router = APIRouter()
 async def stats_overview(start_date: str | None = Query(default=None),
                          end_date: str | None = Query(default=None),
                          current_user: TokenData = Depends(get_current_user)):
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
-    uid_filter = "AND uid = %s" if uid else ""
-    uid_params = [uid] if uid else []
     """获取概览统计。admin 看全部，普通用户只看自己的数据。"""
     uid = "" if current_user.is_admin else current_user.uid
     logger.info(f"[API] 获取概览统计 range={start_date}~{end_date} uid={uid or 'ALL'}")
@@ -434,6 +493,8 @@ async def stats_overview(start_date: str | None = Query(default=None),
         hourly_dist = get_hourly_distribution(start_date=start_date, end_date=end_date, uid=uid)
         duration_trend = get_duration_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
         negative_trend = get_negative_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
+        model_token_breakdown = get_model_token_breakdown(start_date=start_date, end_date=end_date, uid=uid)
+        negative_feedback = get_negative_feedback_stats(start_date=start_date, end_date=end_date, uid=uid)
 
         return JSONResponse(content={
             "success": True,
@@ -446,6 +507,8 @@ async def stats_overview(start_date: str | None = Query(default=None),
             "hourly_distribution": hourly_dist,
             "duration_trend": duration_trend,
             "negative_trend": negative_trend,
+            "model_token_breakdown": model_token_breakdown,
+            "negative_feedback": negative_feedback,
         })
     except Exception as e:
         logger.exception(f"[API] 概览统计失败: {e}")
