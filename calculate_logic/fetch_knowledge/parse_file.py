@@ -303,8 +303,6 @@ class DocumentParser:
 
             text = "\n".join(full_text)
             text = self._clean_markdown_text(text)
-            if len(text) >= 50:
-                text = await self._llm_markdown_enhance(text)
             await self._write_office_outputs(out_dir, text, anchors)
             return text
         except Exception as e:
@@ -372,7 +370,7 @@ class DocumentParser:
         # HTML 表格先转 MD，再由 _clean_markdown_text 统一归一化（表格保护、空行、去 emoji）
         text = self._convert_html_tables_to_markdown(text)
         text = self._clean_markdown_text(text)
-        return await self._llm_markdown_enhance(text)
+        return text
 
     # ============================================================
     # 图片标准化：统一转 RGB JPEG、限最长边、压缩质量，用于喂给 VLM
@@ -652,59 +650,6 @@ class DocumentParser:
             lines.append("| " + " | ".join(row_cells) + " |")
             
         return "\n".join(lines).strip()
-
-    # ============================================================
-    # LLM Markdown 增强：修复格式、增进层次感（纯文本增强，不改动业务内容）
-    # ============================================================
-    async def _llm_markdown_enhance(self, text: str) -> str:
-        if not text or len(text) > 60_000:
-            logger.info(f"[LLM增强] 跳过：文本为空或超长({len(text)} chars)")
-            return text
-        logger.info(f"[LLM增强] 开始增强，文本长度={len(text)} chars")
-        client = await _get_vlm_async_client()
-        system_prompt = (
-            "你是一个 Markdown 文档优化专家。你的任务是对用户提供的 Markdown 文本进行格式修复与层次增强，"
-            "不改动任何业务内容，只做结构优化。\n\n"
-            "【修复目标】\n"
-            "1. 修复标题层级：确保 # 号数量与实际级别匹配，避免跳级。\n"
-            "2. 修复列表缩进：确保列表项缩进正确，嵌套关系清晰。\n"
-            "3. 修复表格对齐：确保表格列数一致，分隔行正确。\n"
-            "4. 修复代码块标记：确保代码块使用正确的围栏标记。\n\n"
-            "【增强目标】\n"
-            "1. 增进层次感：适当添加分隔线（---）或小节标题，让文档结构更清晰。\n"
-            "2. 强调关键概念：对重要术语或结论使用 **加粗** 或 > 引用块。\n"
-            "3. 保持原意不变：不删除、不添加任何业务内容，只做表达优化。\n\n"
-            "【输出要求】\n"
-            "- 只输出优化后的 Markdown 正文，不要包裹 ```，不要添加任何解释或前缀，也不要添加emoji等表情包。\n"
-            "- 保持原文的段落结构和语义完整。"
-        )
-        user_prompt = f"请对以下 Markdown 文本进行格式修复与层次增强：\n\n{text}"
-        try:
-            async with self._api_semaphore:
-                response = await client.chat.completions.create(
-                    model=self.text_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.1,
-                )
-            if response is None or not hasattr(response, 'choices') or not response.choices:
-                logger.warning(f"[LLM增强] API 返回响应为空或格式异常，使用原文")
-                return text
-            message = response.choices[0].message
-            if message is None or not hasattr(message, 'content') or message.content is None:
-                logger.warning(f"[LLM增强] API 返回消息内容为空，使用原文")
-                return text
-            enhanced = message.content.strip()
-            if not enhanced:
-                logger.warning(f"[LLM增强] 输出为空，使用原文")
-                return text
-            logger.info(f"[LLM增强] 完成，输入长度={len(text)}，输出长度={len(enhanced)}")
-            return enhanced
-        except Exception as e:
-            logger.error(f"[LLM增强] 调用失败: {e}，使用原文")
-            return text
 
     # ============================================================
     # 清洗Markdown文本：规范化表格、换行、空行、去除表情包
@@ -1142,8 +1087,6 @@ class DocumentParser:
 
         text = "\n\n".join(md_lines)
         text = self._clean_markdown_text(text)
-        if len(text) >= 50:
-            text = await self._llm_markdown_enhance(text)
         await self._write_office_outputs(out_dir, text, anchors)
         return text
 
