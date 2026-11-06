@@ -160,10 +160,11 @@ async def health_check():
 # ================= 素材访问接口（JWT 鉴权） =================
 # 知识库切片内容提取自图片素材时，chunk.url 记录的是这里的地址。
 # 静态挂载不走鉴权，故用受控接口：登录用户方可访问，目录(含文档子目录)与文件名白名单校验防目录穿越。
-# 图片落在 <PARSE_RESULT_DIR>/<doc_dir>/<category>/<filename>：
+# 图片落在 <PARSE_RESULT_DIR>/{uid}/<doc_dir>/<category>/<filename>（新结构）：
 #   - extracted/images：插图（MinerU 从页面抽取的图片）
 #   - render/page_renders：整页渲染图（纯图片页的整页快照）
 # URL 形态：/api/media/{category}/{doc_dir}/{filename}
+# 也兼容旧结构 <PARSE_RESULT_DIR>/<doc_dir>/<category>/<filename>
 from calculate_logic.fetch_knowledge.parse_file import PARSE_RESULT_DIR
 
 MEDIA_OUTPUT_ROOT = str(PARSE_RESULT_DIR)
@@ -178,16 +179,34 @@ _MEDIA_FILENAME_RE = re.compile(r"^[\w\u4e00-\u9fff ][\w\u4e00-\u9fff ._-]*$")
 
 @app.get("/api/media/{category}/{doc_dir}/{filename}")
 async def get_media_file(category: str, doc_dir: str, filename: str, _: TokenData = Depends(get_current_user)):
-    """返回知识库素材文件（图片等）。需携带 Bearer Token。"""
+    """返回知识库素材文件（图片等）。需携带 Bearer Token。
+
+    支持新旧两种目录结构：
+    - 新结构：<PARSE_RESULT_DIR>/{uid}/{doc_dir}/{category}/{filename}
+    - 旧结构：<PARSE_RESULT_DIR>/{doc_dir}/{category}/{filename}
+    """
     sub = MEDIA_CATEGORY_DIRS.get(category)
     if not sub:
         raise HTTPException(status_code=404, detail="Unknown media category")
     if ".." in doc_dir or ".." in filename or not _MEDIA_FILENAME_RE.match(doc_dir) or not _MEDIA_FILENAME_RE.match(filename):
         raise HTTPException(status_code=404, detail="Invalid path or filename")
 
+    # 先尝试新结构：搜索所有 uid 子目录
+    media_root = Path(MEDIA_OUTPUT_ROOT)
+    for uid_dir in media_root.iterdir():
+        if not uid_dir.is_dir() or uid_dir.name.startswith("."):
+            continue
+        media_dir = uid_dir / doc_dir / sub
+        file_path = media_dir / filename
+        if file_path.is_file():
+            if not os.path.realpath(str(file_path)).startswith(os.path.realpath(MEDIA_OUTPUT_ROOT) + os.sep):
+                raise HTTPException(status_code=404, detail="Invalid path")
+            media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            return FileResponse(str(file_path), media_type=media_type)
+
+    # 兼容旧结构：直接在根目录下找
     media_dir = os.path.join(MEDIA_OUTPUT_ROOT, doc_dir, sub)
     file_path = os.path.join(media_dir, filename)
-    # 兜底确认解析后仍位于目标目录内，防目录穿越
     if not os.path.realpath(file_path).startswith(os.path.realpath(MEDIA_OUTPUT_ROOT) + os.sep):
         raise HTTPException(status_code=404, detail="Invalid path")
     if not os.path.isfile(file_path):

@@ -505,11 +505,9 @@ MINERU_OUTPUT_DIR = str(PARSE_RESULT_DIR)
 def _image_abs_to_url(abs_path: str) -> str:
     """把落盘图片的绝对路径换算成可被网页渲染的 URL(/api/media/{category}/{doc}/{file})。
 
-    FastAPI 的 /api/media(见 app/app.py)以 <MINERU_OUTPUT_DIR>/<doc>/<category>/<file>
-    服务图片(JWT 鉴权)。类别由图片所在子目录推断：
-      - .../<doc>/images/page_*.jpg        -> extracted
-      - .../<doc>/page_renders/page_*.png  -> render
-    无法换算时返回空串。
+    FastAPI 的 /api/media(见 app/app.py)以 <PARSE_RESULT_DIR> 为根服务图片(JWT 鉴权)。
+    支持新的 uid 子目录结构：<PARSE_RESULT_DIR>/{uid}/{doc>/<category>/<file>
+    也兼容旧结构：<PARSE_RESULT_DIR>/<doc>/<category>/<file>
     """
     if not abs_path:
         return ""
@@ -518,25 +516,41 @@ def _image_abs_to_url(abs_path: str) -> str:
     except Exception:
         return ""
     if rel.startswith(".."):
-        return ""  # 图片不在 MinerU 输出目录下，无法对外提供
-    parts = rel.split("/")
-    if len(parts) < 3:
         return ""
-    doc_dir, category_dir, filename = parts[0], parts[1], parts[-1]
+    parts = rel.split("/")
+    # 新结构: {uid}/{doc}/{category}/{filename} -> 4+ parts
+    # 旧结构: {doc}/{category}/{filename} -> 3 parts
+    if len(parts) >= 4:
+        # 新结构：uid/doc/category/filename
+        doc_dir, category_dir, filename = parts[1], parts[2], parts[-1]
+    elif len(parts) >= 3:
+        # 旧结构：doc/category/filename
+        doc_dir, category_dir, filename = parts[0], parts[1], parts[-1]
+    else:
+        return ""
     category = {"images": "extracted", "page_renders": "render"}.get(category_dir)
     if not category:
-        return ""  # 未知类别目录，不对外提供
+        return ""
     return f"/api/media/{category}/{doc_dir}/{filename}"
 
 
-def load_document_anchors(save_path: str) -> list[dict]:
-    """读取某份 PDF 解析产出的 anchors.json(文字块↔达标插图绝对路径)。
+def load_document_anchors(save_path: str, uid: str = "") -> list[dict]:
+    """读取某份文件解析产出的 anchors.json(文字块↔达标插图绝对路径)。
 
-    save_path 为入库的源文件路径；其文件名前缀(file_stem)对应 MinerU 产物目录，
-    即 <MINERU_OUTPUT_DIR>/<file_stem>/anchors.json。文件缺失/解析失败返回 []。
+    save_path 为入库的源文件路径；其文件名前缀(file_stem)对应解析产物目录，
+    即 <PARSE_RESULT_DIR>/{uid}/{file_stem}/anchors.json（新结构）。
+    也兼容旧结构 <PARSE_RESULT_DIR>/{file_stem}/anchors.json。
+    文件缺失/解析失败返回 []。
     """
     try:
         file_stem = Path(save_path).stem
+        if uid:
+            anchors_path = Path(MINERU_OUTPUT_DIR) / uid / file_stem / "anchors.json"
+            if anchors_path.exists():
+                with open(anchors_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return data.get("anchors", []) if isinstance(data, dict) else []
+        # 兼容旧路径
         anchors_path = Path(MINERU_OUTPUT_DIR) / file_stem / "anchors.json"
         if not anchors_path.exists():
             return []
@@ -558,7 +572,7 @@ def _anchor_image_urls(anchor: dict) -> list[str]:
     return urls
 
 
-def resolve_child_image_urls(semantic_chunks: Sequence[SemanticChunkOutput], save_path: str) -> None:
+def resolve_child_image_urls(semantic_chunks: Sequence[SemanticChunkOutput], save_path: str, uid: str = "") -> None:
     """按"文本包含匹配"在父块层面给插图填 URL，并让该父块下所有子块继承(就地修改)。
 
     规则：
@@ -568,7 +582,7 @@ def resolve_child_image_urls(semantic_chunks: Sequence[SemanticChunkOutput], sav
     - 锚点 text 过短的不参与匹配，避免误伤(如纯数字/无意义片段)。
     """
     anchors = [
-        a for a in load_document_anchors(save_path)
+        a for a in load_document_anchors(save_path, uid=uid)
         if a.get("text") and a.get("image_paths")
     ]
     if not anchors:

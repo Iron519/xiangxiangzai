@@ -101,6 +101,7 @@ class MinerUProcessor:
         base_url: str = config["BASE_URL"],
         vlm_model: str = config["VLM_MODEL"],
         display_name: str | None = None,
+        uid: str = "",
     ):
         self.pdf_path = str(pdf_path)
         # 优先用 display_name 做产物目录名，保持可读性；空格替换为下划线
@@ -108,8 +109,11 @@ class MinerUProcessor:
         self.file_stem = _name_stem.replace(" ", "_")
         self.output_dir = Path(output_dir)
 
-        # 每份 PDF 单独一个子目录，所有中间/最终产物都挂在该文档目录下，防止不同文档的 page_results/images/merged.md 相互覆盖
-        self.doc_dir = self.output_dir / self.file_stem
+        # 支持 uid 子目录：output_dir/{uid}/{file_stem}/
+        if uid:
+            self.doc_dir = self.output_dir / uid / self.file_stem
+        else:
+            self.doc_dir = self.output_dir / self.file_stem
         self.page_pdf_dir = self.doc_dir / page_pdf_dir
         self.page_result_dir = self.doc_dir / page_result_dir
         self.img_dir = self.doc_dir / img_dir
@@ -795,7 +799,9 @@ class MinerUProcessor:
     def image_abs_to_url(abs_path: str, output_dir: str) -> str:
         """把落盘图片的绝对路径换算成可被网页渲染的 URL(/api/media/{category}/{doc}/{file})。
 
-        FastAPI 的 /api/media(见 app/app.py)以 <output_dir>/<category>/<file> 服务图片(JWT 鉴权)。
+        支持新旧两种目录结构：
+        - 新结构: <output_dir>/{uid}/{doc}/{category}/{filename}
+        - 旧结构: <output_dir>/<doc>/<category>/<filename>
         类别由图片所在子目录推断：
           - .../<doc>/images/page_*.jpg        -> extracted
           - .../<doc>/page_renders/page_*.png  -> render
@@ -810,13 +816,17 @@ class MinerUProcessor:
         if rel.startswith(".."):
             return ""
         parts = rel.split("/")
-        if len(parts) < 3:
+        # 新结构: {uid}/{doc}/{category}/{filename} -> 4+ parts
+        # 旧结构: {doc}/{category}/{filename} -> 3 parts
+        if len(parts) >= 4:
+            doc_dir, category_dir, filename = parts[1], parts[2], parts[-1]
+        elif len(parts) >= 3:
+            doc_dir, category_dir, filename = parts[0], parts[1], parts[-1]
+        else:
             return ""
-        doc_dir, category_dir, filename = parts[0], parts[1], parts[-1]
         category = {"images": "extracted", "page_renders": "render"}.get(category_dir)
         if not category:
             return ""
-        # URL-encode 路径组件，防止空格、中文等特殊字符导致 404
         from urllib.parse import quote
         doc_dir_enc = quote(doc_dir, safe="")
         filename_enc = quote(filename, safe="")

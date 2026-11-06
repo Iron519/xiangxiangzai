@@ -41,11 +41,12 @@ services:
     working_dir: /app
     environment:
       TZ: Asia/Shanghai
+      ENV: dev
     ports:
       - "8099:8099"
     volumes:
       - .:/app
-    command: uvicorn app.app:app --host 0.0.0.0 --port 8099 --workers 1
+    command: sh -c 'if [ "$ENV" = "prod" ]; then uvicorn app.app:app --host 0.0.0.0 --port 8099 --workers 4; else uvicorn app.app:app --host 0.0.0.0 --port 8099 --workers 1 --reload; fi'
     depends_on:
       my_agent_db:
         condition: service_healthy
