@@ -1814,6 +1814,20 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="promptModal" style="display:none">
+  <div class="modal-dialog">
+    <div class="modal-header" id="promptTitle">输入</div>
+    <div class="modal-body">
+      <p class="modal-hint" id="promptMsg" style="font-size:var(--fs-md);color:var(--c-text);margin:0 0 12px"></p>
+      <input type="text" class="modal-input" id="promptInput" />
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="promptCancel">取消</button>
+      <button class="btn-primary" id="promptOk">确认</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="alertModal" style="display:none">
   <div class="modal-dialog">
     <div class="modal-header" id="alertTitle">提示</div>
@@ -2086,6 +2100,33 @@
   document.getElementById('alertOk').addEventListener('click', () => {
     alertModal.style.display = 'none';
     const cb = _alertCb; _alertCb = null; if (cb) cb();
+  });
+
+  // 带输入框的模态弹窗（替代原生 prompt）：返回 Promise<string|null>
+  const promptModal = document.getElementById('promptModal');
+  let _promptCb = null;
+  function showPrompt(title, msg, defaultValue='') {
+    return new Promise(resolve => {
+      document.getElementById('promptTitle').textContent = title;
+      document.getElementById('promptMsg').textContent = msg;
+      const input = document.getElementById('promptInput');
+      input.value = defaultValue;
+      _promptCb = resolve;
+      promptModal.style.display = 'flex';
+      setTimeout(() => { input.focus(); input.select(); }, 50);
+    });
+  }
+  document.getElementById('promptOk').addEventListener('click', () => {
+    promptModal.style.display = 'none';
+    const cb = _promptCb; _promptCb = null; if (cb) cb(document.getElementById('promptInput').value);
+  });
+  document.getElementById('promptCancel').addEventListener('click', () => {
+    promptModal.style.display = 'none';
+    const cb = _promptCb; _promptCb = null; if (cb) cb(null);
+  });
+  document.getElementById('promptInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('promptOk').click();
+    if (e.key === 'Escape') document.getElementById('promptCancel').click();
   });
 
   // SVG 图标常量（统一风格，替代字符 ✓✗⊘⏹⏳⟳ 等）
@@ -2821,54 +2862,175 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     if (e.key === 'Escape') closeImageLightbox();
   });
 
-  // ── 聊天历史持久化 ──
-  // 消息结构: { role: 'user'|'ai', text: 原文, turnCount: 会话轮次(ai), judgement?: 'like'|'dislike' }
-  function pushChat(role, text, extra) {
-    const msgs = Store.get('chat', []);
-    msgs.push({ role, text, ...(extra || {}) });
-    // 控制存储上限，避免无限增长（保留最近 200 条）
-    if (msgs.length > 200) msgs.splice(0, msgs.length - 200);
-    Store.set('chat', msgs);
-  }
-  function restoreChat() {
-    const msgs = Store.get('chat', []);
-    if (!msgs.length) return;
-    if (chatEmpty) chatEmpty.style.display = 'none';
-    for (const m of msgs) {
-      if (m.role === 'user') chatMessages.appendChild(createUserMsg(m.text));
-      else {
-        const relatedHtml = m.relatedQuestions || m.sources
-          ? buildRelatedHtml(m.relatedQuestions, m.sources)
-          : '';
-        chatMessages.appendChild(createAiMsg(renderMarkdown(m.text || '') + relatedHtml, {
-          turnCount: m.turnCount, text: m.text || '', judgement: m.judgement
-        }));
-      }
-    }
-    scrollToBottom();
+  // ── 聊天历史：从服务端加载 ──
+
+  function timeAgo(isoStr) {
+    if (!isoStr) return '';
+    const diff = Date.now() - new Date(isoStr).getTime();
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return '刚刚';
+    if (min < 60) return min + '分钟前';
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return hr + '小时前';
+    const day = Math.floor(hr / 24);
+    if (day < 7) return day + '天前';
+    return new Date(isoStr).toLocaleDateString();
   }
 
-  // ── 新对话：清空前端缓存 + UI，并通知后端重置会话上下文 ──
+  async function loadSessionList() {
+    try {
+      const res = await apiFetch('/sessions');
+      const data = await res.json();
+      if (data.code !== 200 || !data.data) return;
+      const list = data.data;
+      const container = document.getElementById('sidebarChatList');
+      if (!container) return;
+      container.innerHTML = '';
+      for (const s of list) {
+        const item = document.createElement('div');
+        item.className = 'sidebar-chat-item' + (s.session_id === sessionId ? ' active' : '');
+        item.dataset.sessionId = s.session_id;
+        item.innerHTML = `
+          <div class="chat-item-row">
+            <span class="chat-item-title">${escapeHtml(s.title || '新对话')}</span>
+            <svg class="chat-item-more" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </div>
+          <span class="chat-item-time">${timeAgo(s.last_message_at)}</span>`;
+        item.addEventListener('click', (e) => {
+          if (e.target.closest('.chat-item-more')) return;
+          if (isStreaming) return;
+          switchToSession(s.session_id);
+        });
+        const moreBtn = item.querySelector('.chat-item-more');
+        if (moreBtn) {
+          moreBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            showSessionMenu(item, s.session_id, s.title);
+          });
+        }
+        container.appendChild(item);
+      }
+    } catch (e) {
+      console.warn('[Sessions] 加载列表失败:', e);
+    }
+  }
+
+  function showSessionMenu(itemEl, sid, currentTitle) {
+    // 移除已有的菜单
+    const existing = document.getElementById('sessionContextMenu');
+    if (existing) existing.remove();
+    const menu = document.createElement('div');
+    menu.id = 'sessionContextMenu';
+    menu.style.cssText = 'position:fixed;z-index:9999;background:var(--c-surface);border:1px solid var(--c-border);border-radius:8px;padding:4px 0;box-shadow:0 4px 12px rgba(0,0,0,0.12);min-width:100px;';
+    const rect = itemEl.querySelector('.chat-item-more').getBoundingClientRect();
+    menu.style.left = rect.right + 4 + 'px';
+    menu.style.top = rect.top + 'px';
+
+    const renameItem = document.createElement('div');
+    renameItem.textContent = '重命名';
+    renameItem.style.cssText = 'padding:8px 16px;cursor:pointer;font-size:13px;color:var(--c-text);';
+    renameItem.addEventListener('mouseenter', () => renameItem.style.background = 'var(--c-sidebar-hover)');
+    renameItem.addEventListener('mouseleave', () => renameItem.style.background = 'transparent');
+    renameItem.addEventListener('click', () => { menu.remove(); renameSession(sid, currentTitle); });
+
+    const deleteItem = document.createElement('div');
+    deleteItem.textContent = '删除';
+    deleteItem.style.cssText = 'padding:8px 16px;cursor:pointer;font-size:13px;color:var(--c-rose);';
+    deleteItem.addEventListener('mouseenter', () => deleteItem.style.background = 'var(--c-sidebar-hover)');
+    deleteItem.addEventListener('mouseleave', () => deleteItem.style.background = 'transparent');
+    deleteItem.addEventListener('click', () => { menu.remove(); deleteSession(sid); });
+
+    menu.appendChild(renameItem);
+    menu.appendChild(deleteItem);
+    document.body.appendChild(menu);
+    setTimeout(() => {
+      document.addEventListener('click', function close() { menu.remove(); document.removeEventListener('click', close); });
+    }, 0);
+  }
+
+  async function renameSession(sid, currentTitle) {
+    const newTitle = await showPrompt('重命名会话', '请输入新的标题', currentTitle || '新对话');
+    if (newTitle === null) return;
+    const trimmed = newTitle.trim();
+    if (!trimmed) { await showAlert('提示', '标题不能为空'); return; }
+    try {
+      await apiFetch(`/session/${encodeURIComponent(sid)}/title`, {
+        method: 'PATCH', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ title: trimmed })
+      });
+      loadSessionList();
+    } catch (e) { await showAlert('重命名失败', e.message); }
+  }
+
+  async function deleteSession(sid) {
+    const ok = await showConfirm('删除会话', '确定删除这个会话吗？', '删除后将无法恢复。', '删除');
+    if (!ok) return;
+    try {
+      await apiFetch(`/session/${encodeURIComponent(sid)}`, { method: 'DELETE' });
+      if (sid === sessionId) {
+        sessionId = null;
+        Store.del('sessionId');
+        chatMessages.querySelectorAll('.chat-msg').forEach(el => el.remove());
+        if (chatEmpty) chatEmpty.style.display = '';
+      }
+      loadSessionList();
+    } catch (e) { await showAlert('删除失败', e.message); }
+  }
+
+  async function switchToSession(sid) {
+    if (sid === sessionId) return;
+    sessionId = sid;
+    Store.set('sessionId', sid);
+    // 更新 active 状态
+    document.querySelectorAll('.sidebar-chat-item').forEach(el => {
+      el.classList.toggle('active', el.dataset.sessionId === sid);
+    });
+    // 从服务端加载聊天记录
+    restoreChatFromServer(sid);
+  }
+
+  async function restoreChatFromServer(sid) {
+    try {
+      const res = await apiFetch(`/session/${encodeURIComponent(sid)}/messages`);
+      const data = await res.json();
+      if (data.code !== 200 || !data.data) return;
+      const msgs = data.data;
+      chatMessages.querySelectorAll('.chat-msg').forEach(el => el.remove());
+      if (!msgs.length) {
+        if (chatEmpty) chatEmpty.style.display = '';
+        return;
+      }
+      if (chatEmpty) chatEmpty.style.display = 'none';
+      for (const m of msgs) {
+        if (m.role === 'user') {
+          chatMessages.appendChild(createUserMsg(m.content));
+        } else {
+          const sources = m.sources || [];
+          const relatedQuestions = m.related_questions || [];
+          const relatedHtml = buildRelatedHtml(relatedQuestions, sources);
+          chatMessages.appendChild(createAiMsg(renderMarkdown(m.content || '') + relatedHtml, {
+            turnCount: m.turn_count, text: m.content || '', judgement: m.judgement || ''
+          }));
+        }
+      }
+      scrollToBottom();
+    } catch (e) {
+      console.warn('[Chat] 从服务端恢复聊天记录失败:', e);
+    }
+  }
+
+  // ── 新对话：清空当前聊天区，开始新的 session ──
   const newChatBtn = document.getElementById('newChatSidebarBtn') || document.getElementById('newChatBtn');
   newChatBtn.addEventListener('click', async () => {
-    if (isStreaming) return;                       // 流式响应中禁止清空
-    const oldId = sessionId;
+    if (isStreaming) return;
     sessionId = null;
     Store.del('sessionId');
-    Store.del('chat');
-    // 只移除消息节点，保留 #chatEmpty 空状态节点
     chatMessages.querySelectorAll('.chat-msg').forEach(el => el.remove());
     if (chatEmpty) chatEmpty.style.display = '';
+    // 更新侧边栏 active 状态
+    document.querySelectorAll('.sidebar-chat-item').forEach(el => el.classList.remove('active'));
     newChatBtn.disabled = true;
-    try {
-      if (oldId) {
-        await apiFetch('/session/clear', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ session_id: oldId })
-        });
-      }
-    } catch (e) { /* 后端清空失败不阻塞新对话 */ }
-    newChatBtn.disabled = false;
+    setTimeout(() => { newChatBtn.disabled = false; }, 300);
   });
 
   function createUserMsg(content) {
@@ -2995,10 +3157,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       const data = await res.json().catch(() => ({}));
       if (data.success) {
         msg.dataset.judgement = data.judgement || '';
-        const msgs = Store.get('chat', []);
-        const hit = msgs.find(m => m.role === 'ai' && String(m.turnCount) === turn);
-        if (hit) hit.judgement = msg.dataset.judgement || '';
-        Store.set('chat', msgs);
         btnFlash(btn, msg.dataset.judgement === 'like' ? '已点赞' : (msg.dataset.judgement === 'dislike' ? '已点踩' : '已取消'));
       } else {
         btnFlash(btn, '保存失败');
@@ -3037,17 +3195,22 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   function regenerateAnswer(btn) {
     if (isStreaming) return;
     const msg = btn.closest('.chat-msg');
-    // 重新生成该轮：后端按轮次重跑需要带源问题；此处复用该轮用户提问（存于历史）触发一次新回答
     const turn = msg && msg.dataset.turn;
     if (!turn) return;
     btnFlash(btn, '正在重新生成…');
-    const msgs = Store.get('chat', []);
-    const idx = msgs.findIndex(m => m.role === 'ai' && String(m.turnCount) === turn);
-    if (idx > 0 && msgs[idx - 1] && msgs[idx - 1].role === 'user') {
-      const q = msgs[idx - 1].text;
-      chatInput.value = q;
-      chatInput.dispatchEvent(new Event('input'));
-      sendMessage();
+    // 从 DOM 中找到该 AI 消息的前一条 user 消息
+    const allMsgs = [...chatMessages.querySelectorAll('.chat-msg')];
+    const aiIdx = allMsgs.indexOf(msg);
+    if (aiIdx > 0) {
+      const prevMsg = allMsgs[aiIdx - 1];
+      if (prevMsg.classList.contains('chat-msg--user')) {
+        const q = prevMsg.querySelector('.chat-msg__bubble');
+        if (q && q.textContent.trim()) {
+          chatInput.value = q.textContent.trim();
+          chatInput.dispatchEvent(new Event('input'));
+          sendMessage();
+        }
+      }
     }
   }
   // ── 点踩弹窗事件 ──
@@ -3116,7 +3279,11 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     // 若上次停留的页面无权访问，回退到 chat
     if (!canAccess(currentPage)) currentPage = 'chat';
     switchPage(currentPage);
-    restoreChat();
+    // 加载侧边栏 session 列表，并恢复上次活跃的 session 聊天记录
+    loadSessionList();
+    if (sessionId) {
+      restoreChatFromServer(sessionId);
+    }
     // 启动上传任务常驻轮询（每 3 秒刷新一次）
     if (window._uploadPollTimer) clearInterval(window._uploadPollTimer);
     window._uploadPollTimer = setInterval(pollUploadStatus, 3000);
@@ -3532,7 +3699,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     chatInput.value = ''; chatInput.style.height = 'auto';
     if (chatEmpty) chatEmpty.style.display = 'none';
     chatMessages.appendChild(createUserMsg(message)); scrollToBottom();
-    pushChat('user', message);
     const streamingEl = createStreamingMsg();
     chatMessages.appendChild(streamingEl); scrollToBottom();
 
@@ -3577,22 +3743,16 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       chatMessages.appendChild(createAiMsg(renderMarkdown(cleanAnswer) + relatedHtml, {
         turnCount, text: cleanAnswer
       })); scrollToBottom();
-      pushChat('ai', cleanAnswer, { turnCount, relatedQuestions, sources: streamSources });
     } catch (err) {
       streamingEl.remove();
       chatMessages.appendChild(createAiMsg(`<p style="color:var(--c-rose)">请求失败，请重试。</p>`)); scrollToBottom();
     }
     isStreaming = false; sendBtn.disabled = !chatInput.value.trim(); newChatBtn.disabled = false;
+    // 刷新侧边栏 session 列表（标题、时间戳可能已更新）
+    loadSessionList();
   }
 
-  // 刷新/关闭时若仍在 streaming，回退最后一条未配对的 user 消息，避免下次恢复出孤立提问
-  window.addEventListener('beforeunload', () => {
-    if (!isStreaming) return;
-    const msgs = Store.get('chat', []);
-    if (msgs.length && msgs[msgs.length - 1].role === 'user') {
-      msgs.pop(); Store.set('chat', msgs);
-    }
-  });
+  // 刷新/关闭时无需额外处理（聊天记录已在服务端持久化）
 
   // 点击相关追问按钮，发送该问题
   function sendRelatedQuestion(btn) {

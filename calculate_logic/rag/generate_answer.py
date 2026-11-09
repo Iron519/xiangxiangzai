@@ -29,8 +29,12 @@ from dotenv import load_dotenv, find_dotenv
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
 
-REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
+REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_SESSIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
+
+# 安全 fallback：spawn 模式下 load_dotenv 可能未生效
+SESSIONS_TABLE = config.get("PG_MYAGENT_SESSIONS_TABLE") or os.getenv("PG_MYAGENT_SESSIONS_TABLE", "") or "myagent_sessions"
+CONV_TABLE = config.get("PG_MYAGENT_CONVERSATIONS_TABLE") or os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "") or "myagent_conversations_history_mgmt"
 
 # ================= 运行路径配置 ===============
 PROJECT_ROOT = config['WORK_PATH']
@@ -147,6 +151,7 @@ def _pg_conn():  # 构建PG客户端
 def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  # 历史对话入库字段
                               ai_msg: str, mode: str, uid: str = "anonymous",
                               sources: list | None = None,
+                              related_questions: list | None = None,
                               duration_ms: int | None = None,
                               prompt_token: int | None = None,
                               completion_token: int | None = None,
@@ -159,8 +164,8 @@ def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  #
                 (uid, session_id, turn_count, user_msg, mode, None),
             )
             conn.execute(
-                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, sources, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s)",
-                (uid, session_id, turn_count, ai_msg, mode, json.dumps(sources if sources else []), duration_ms, prompt_token, completion_token, total_token),
+                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, sources, related_questions, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s, %s)",
+                (uid, session_id, turn_count, ai_msg, mode, json.dumps(sources if sources else []), json.dumps(related_questions if related_questions else []), duration_ms, prompt_token, completion_token, total_token),
             )
             conn.commit()
         logger.info(f"[PG] 已保存第{turn_count}轮对话: uid={uid} | session={session_id[:3]}... | mode={mode} | duration={duration_ms}ms | tokens={total_token}")
@@ -999,7 +1004,23 @@ async def chat_stream(
     # 解析 /test U00XXXXX 命令：admin 可模拟指定 uid
     uid, message = _parse_test_command(message, current_user)
 
-    session_id = _get_or_create_session_id(session_id)
+    # ── Session 管理：归属校验 / 新建 / 超限软删 ──
+    is_new_session = False
+    if session_id:
+        # 已有 session：校验是否属于当前 uid
+        if not _verify_session_owner(uid, session_id):
+            # 归属不匹配或不存在：当作新 session 处理
+            session_id = str(uuid.uuid4())
+            is_new_session = True
+    else:
+        # 新 session
+        session_id = str(uuid.uuid4())
+        is_new_session = True
+
+    if is_new_session:
+        _enforce_session_limit(uid)
+        _create_session_row(uid, session_id)
+
     config = _make_config(session_id)
 
     current_state = await _get_current_state(session_id)
@@ -1032,6 +1053,7 @@ async def chat_stream(
             # 联运行时共享的统计结果（由主图循环写入，命中敏感时由本函数覆盖）
             ctx = {
                 "full_answer": "", "final_mode": "", "final_sources": [],
+                "final_related_questions": [],
                 "prompt_tokens": None, "completion_tokens": None, "total_tokens": None,
                 "scene_id": "",
             }
@@ -1056,11 +1078,13 @@ async def chat_stream(
                         mode=ctx_["final_mode"],
                         uid=uid,
                         sources=ctx_["final_sources"],
+                        related_questions=ctx_.get("final_related_questions", []),
                         duration_ms=elapsed_ms,
                         prompt_token=ctx_["prompt_tokens"],
                         completion_token=ctx_["completion_tokens"],
                         total_token=ctx_["total_tokens"],
                     )
+                    _update_session_timestamp(uid, session_id, turn_count)
                 except Exception as pg_err:
                     logger.warning(f"[PG] 持久化写入失败（不影响对话）: {pg_err}")
 
@@ -1134,6 +1158,7 @@ async def chat_stream(
                                                 related_questions.append(followup_q)
                                                 logger.info(f"[Stream] 场景追问追加: {followup_q[:50]}")
                                     logger.info(f"[Stream] node_generate 完成，sources={len(ctx['final_sources'])}，related={len(related_questions)}")
+                                    ctx["final_related_questions"] = related_questions
                                     await q.put(f"data: {json.dumps({'type': 'done', 'sources': ctx['final_sources'], 'related_questions': related_questions})}\n\n")
                                     _persist_turn(ctx)
 
@@ -1231,6 +1256,21 @@ async def chat_stream(
             # 兜底：正常路径下若主图完成点已落库则不重复写；异常中断时补写
             _persist_turn(ctx)
 
+            # ── 首轮自动生成标题（只生成一次）──
+            if is_new_session and turn_count == 1 and message:
+                try:
+                    title = await _generate_session_title(message)
+                    with _pg_conn() as conn:
+                        conn.execute(
+                            f"UPDATE {SESSIONS_TABLE} SET title = %s "
+                            f"WHERE uid = %s AND session_id = %s AND deleted = false AND title = ''",
+                            (title, uid, session_id),
+                        )
+                        conn.commit()
+                    logger.info(f"[SessionTitle] 首轮标题已生成: '{title}' sid={session_id[:8]}")
+                except Exception as title_err:
+                    logger.warning(f"[SessionTitle] 首轮标题生成失败: {title_err}")
+
         except Exception as e:
             logger.error(f"[ChatStream] 流式输出异常: {str(e)}")
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
@@ -1244,7 +1284,7 @@ async def conversation_judgement(session_id: str = Body(...),
                                  turn_count: int = Body(...),
                                  judgement: str = Body(...),
                                  detail: str = Body("", embed=True),
-                                 _: TokenData = Depends(get_current_user)):
+                                 current_user: TokenData = Depends(get_current_user)):
     """记录用户对某轮 AI 回答的反馈：judgement in {"like", "dislike", ""}。
     detail: 可选，点踩时的不满原因（如"回答不准确"等）。
     """
@@ -1279,7 +1319,10 @@ async def conversation_judgement(session_id: str = Body(...),
 
 # ================= 清除会话 =================
 @router.post("/session/clear")
-async def session_clear(session_id: str = Body(...), _: TokenData = Depends(get_current_user)):
+async def session_clear(session_id: str = Body(...), current_user: TokenData = Depends(get_current_user)):
+    uid = current_user.uid
+    if not _verify_session_owner(uid, session_id):
+        return {"success": False, "error": "无权操作该会话"}
     config = _make_config(session_id)
     
     # 获取空状态用于覆盖
@@ -1317,3 +1360,204 @@ async def session_get(session_id: str, _: TokenData = Depends(get_current_user))
         "messages_count": len(values.get("messages", [])),
         "context_preview": values.get("context", "")[:100] if values.get("context") else ""
     }
+
+
+# ================= Session 管理辅助函数 =================
+
+MAX_SESSIONS_PER_USER = 10
+
+def _create_session_row(uid: str, session_id: str) -> None:
+    """在 myagent_sessions 表中插入新 session 行。"""
+    with _pg_conn() as conn:
+        conn.execute(
+            f"INSERT INTO {SESSIONS_TABLE} (uid, session_id) VALUES (%s, %s) "
+            f"ON CONFLICT (uid, session_id) DO NOTHING",
+            (uid, session_id),
+        )
+        conn.commit()
+
+def _verify_session_owner(uid: str, session_id: str) -> bool:
+    """校验 session 是否属于该 uid 且未删除。"""
+    with _pg_conn() as conn:
+        cur = conn.execute(
+            f"SELECT 1 FROM {SESSIONS_TABLE} "
+            f"WHERE uid = %s AND session_id = %s AND deleted = false",
+            (uid, session_id),
+        )
+        return cur.fetchone() is not None
+
+def _enforce_session_limit(uid: str) -> None:
+    """超10个时软删最旧的 session（含 checkpoint 清除）。"""
+    with _pg_conn() as conn:
+        cur = conn.execute(
+            f"SELECT session_id FROM {SESSIONS_TABLE} "
+            f"WHERE uid = %s AND deleted = false ORDER BY last_message_at ASC",
+            (uid,),
+        )
+        rows = cur.fetchall()
+        if len(rows) >= MAX_SESSIONS_PER_USER:
+            excess = rows[:len(rows) - MAX_SESSIONS_PER_USER + 1]
+            for (sid,) in excess:
+                conn.execute(
+                    f"UPDATE {SESSIONS_TABLE} SET deleted = true WHERE uid = %s AND session_id = %s",
+                    (uid, sid),
+                )
+            conn.commit()
+            for (sid,) in excess:
+                try:
+                    cfg = _make_config(sid)
+                    empty: ChatState = {
+                        "session_id": sid, "messages": [], "context": "", "sources": [],
+                        "mode": "unknown", "final_answer": "", "turn_count": 0,
+                        "is_followup": None, "query": None, "user": None,
+                        "current_time": "", "scene": None, "scenes": None,
+                    }
+                    graph.update_state(cfg, empty)
+                except Exception as e:
+                    logger.warning(f"[SessionLimit] 清除旧 checkpoint 失败 sid={sid[:8]}: {e}")
+
+async def _generate_session_title(user_message: str) -> str:
+    """用 fast LLM 生成10字以内标题。"""
+    try:
+        llm = get_fast_llm_client()
+        resp = await llm.ainvoke([
+            SystemMessage(content="你是标题生成器。请为用户的提问生成一个10字以内的中文标题，只输出标题文字，不要加引号、标点或换行。"),
+            HumanMessage(content=user_message),
+        ])
+        title = resp.content.strip().replace("\n", "").replace("\"", "").replace("'", "")[:10]
+        return title if title else user_message[:10]
+    except Exception as e:
+        logger.warning(f"[SessionTitle] 标题生成失败，降级为截取: {e}")
+        return user_message[:10]
+
+def _update_session_timestamp(uid: str, session_id: str, turn_count: int) -> None:
+    """每轮结束后更新 session 的时间戳和轮数。"""
+    with _pg_conn() as conn:
+        conn.execute(
+            f"UPDATE {SESSIONS_TABLE} "
+            f"SET last_message_at = NOW(), turn_count = %s "
+            f"WHERE uid = %s AND session_id = %s AND deleted = false",
+            (turn_count, uid, session_id),
+        )
+        conn.commit()
+
+
+# ================= Session 管理 API =================
+
+@router.get("/sessions")
+async def list_sessions(current_user: TokenData = Depends(get_current_user)):
+    """返回当前用户的 session 列表（最多10个，按最后消息时间降序）。"""
+    uid = current_user.uid
+    try:
+        with _pg_conn() as conn:
+            cur = conn.execute(
+                f"SELECT session_id, title, last_message_at, turn_count "
+                f"FROM {SESSIONS_TABLE} "
+                f"WHERE uid = %s AND deleted = false ORDER BY last_message_at DESC",
+                (uid,),
+            )
+            rows = cur.fetchall()
+        sessions = [
+            {
+                "session_id": r[0],
+                "title": r[1] or "新对话",
+                "last_message_at": r[2].isoformat() if r[2] else None,
+                "turn_count": r[3],
+            }
+            for r in rows
+        ]
+        return {"code": 200, "data": sessions}
+    except Exception as e:
+        logger.error(f"[Sessions] 获取列表失败 uid={uid}: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
+@router.get("/session/{session_id}/messages")
+async def get_session_messages(session_id: str, current_user: TokenData = Depends(get_current_user)):
+    """从对话表读取该 session 的所有消息（严格校验 uid 归属）。"""
+    uid = current_user.uid
+    if not _verify_session_owner(uid, session_id):
+        return {"code": 403, "message": "无权访问该会话", "data": []}
+    try:
+        with _pg_conn() as conn:
+            cur = conn.execute(
+                f"SELECT role, content, turn_count, sources, related_questions, user_judgement, judgement_detail "
+                f"FROM {CONV_TABLE} "
+                f"WHERE uid = %s AND session_id = %s ORDER BY id ASC",
+                (uid, session_id),
+            )
+            rows = cur.fetchall()
+        messages = [
+            {
+                "role": r[0],
+                "content": r[1],
+                "turn_count": r[2],
+                "sources": r[3] if r[3] else [],
+                "related_questions": r[4] if r[4] else [],
+                "judgement": r[5] or "",
+                "judgement_detail": r[6] or "",
+            }
+            for r in rows
+        ]
+        return {"code": 200, "data": messages}
+    except Exception as e:
+        logger.error(f"[SessionMessages] 获取失败 uid={uid} sid={session_id[:8]}: {e}")
+        return {"code": 500, "message": str(e), "data": []}
+
+
+@router.patch("/session/{session_id}/title")
+async def update_session_title(
+    session_id: str,
+    title: str = Body(..., embed=True),
+    current_user: TokenData = Depends(get_current_user),
+):
+    """用户修改 session 标题。"""
+    uid = current_user.uid
+    if not _verify_session_owner(uid, session_id):
+        return {"code": 403, "message": "无权修改该会话"}
+    title = title.strip()[:50]
+    if not title:
+        return {"code": 400, "message": "标题不能为空"}
+    try:
+        with _pg_conn() as conn:
+            conn.execute(
+                f"UPDATE {SESSIONS_TABLE} SET title = %s "
+                f"WHERE uid = %s AND session_id = %s AND deleted = false",
+                (title, uid, session_id),
+            )
+            conn.commit()
+        return {"code": 200, "data": {"session_id": session_id, "title": title}}
+    except Exception as e:
+        logger.error(f"[SessionTitle] 修改失败 uid={uid} sid={session_id[:8]}: {e}")
+        return {"code": 500, "message": str(e)}
+
+
+@router.delete("/session/{session_id}")
+async def delete_session(session_id: str, current_user: TokenData = Depends(get_current_user)):
+    """软删 session + 清 checkpoint。"""
+    uid = current_user.uid
+    if not _verify_session_owner(uid, session_id):
+        return {"code": 403, "message": "无权删除该会话"}
+    try:
+        with _pg_conn() as conn:
+            conn.execute(
+                f"UPDATE {SESSIONS_TABLE} SET deleted = true "
+                f"WHERE uid = %s AND session_id = %s",
+                (uid, session_id),
+            )
+            conn.commit()
+        try:
+            cfg = _make_config(session_id)
+            empty: ChatState = {
+                "session_id": session_id, "messages": [], "context": "", "sources": [],
+                "mode": "unknown", "final_answer": "", "turn_count": 0,
+                "is_followup": None, "query": None, "user": None,
+                "current_time": "", "scene": None, "scenes": None,
+            }
+            graph.update_state(cfg, empty)
+        except Exception as e:
+            logger.warning(f"[SessionDelete] 清除 checkpoint 失败 sid={session_id[:8]}: {e}")
+        return {"code": 200, "data": {"session_id": session_id}}
+    except Exception as e:
+        logger.error(f"[SessionDelete] 删除失败 uid={uid} sid={session_id[:8]}: {e}")
+        return {"code": 500, "message": str(e)}

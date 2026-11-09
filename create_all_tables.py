@@ -10,6 +10,7 @@ USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user_mgmt")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks_mgmt")
 CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history_mgmt")
+SESSION_TABLE = os.getenv("PG_MYAGENT_SESSIONS_TABLE", "myagent_sessions")
 TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks_mgmt")
 FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
@@ -80,9 +81,27 @@ DDL_STATEMENTS = [
     f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_file_hash ON {KB_TABLE} (uid, file_name, text_hash)",
     f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_expire_time ON {KB_TABLE} (expire_time)",
 
-    # ─── 对话历史表：uid 索引 ───
+    # ─── 会话管理表：一个用户最多10个session ───
+    f"DROP TABLE IF EXISTS {SESSION_TABLE}",
     f"""
-    CREATE TABLE IF NOT EXISTS {CONV_TABLE} (
+    CREATE TABLE {SESSION_TABLE} (
+        id              BIGSERIAL PRIMARY KEY,
+        uid             VARCHAR(5) NOT NULL,
+        session_id      TEXT NOT NULL,
+        title           TEXT NOT NULL DEFAULT '',
+        last_message_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        turn_count      INT NOT NULL DEFAULT 0,
+        deleted         BOOLEAN NOT NULL DEFAULT false,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (uid, session_id)
+    )
+    """,
+    f"CREATE INDEX idx_{SESSION_TABLE}_uid_time ON {SESSION_TABLE} (uid, last_message_at DESC) WHERE deleted = false",
+
+    # ─── 对话历史表：删除旧表重建 ───
+    f"DROP TABLE IF EXISTS {CONV_TABLE}",
+    f"""
+    CREATE TABLE {CONV_TABLE} (
         id            BIGSERIAL PRIMARY KEY,
         uid           VARCHAR(5) NOT NULL DEFAULT '',
         session_id    TEXT NOT NULL,
@@ -99,6 +118,7 @@ DDL_STATEMENTS = [
         total_token   BIGINT DEFAULT 0,
         user_judgement TEXT DEFAULT NULL,
         judgement_detail TEXT DEFAULT NULL,
+        related_questions JSONB DEFAULT NULL,
         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
