@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import psycopg
 from fastapi import APIRouter, UploadFile, File, Form, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from calculate_logic.chunk_pipeline.config import PROJECT_ROOT, logger
@@ -21,7 +21,7 @@ from calculate_logic.chunk_pipeline.chunk import (
 from calculate_logic.chunk_pipeline.embedding import EmbeddingModel, store_semantic_chunks
 from calculate_logic.chunk_pipeline.rewrite import rewrite_chunks_with_coref
 from calculate_logic.fetch_knowledge.parse_file import DocumentParser, PARSE_RESULT_DIR
-from sso_did.auth import TokenData, get_current_user
+from sso_did.auth import TokenData, get_current_user, get_current_user_sse
 
 
 # ============================================================
@@ -735,9 +735,119 @@ async def kb_upload_status(current_user: TokenData = Depends(get_current_user)):
     return JSONResponse(content={"success": True, "tasks": serialized, "total": len(serialized)})
 
 
+@router.get("/kb/upload-sse")
+async def kb_upload_sse(token: str = "", current_user: TokenData = Depends(get_current_user_sse)):
+    """SSE 端点：实时推送当前用户的上传任务状态 + 知识库统计。
+
+    认证方式：由于 EventSource 不支持自定义 header，token 通过 query 参数传递。
+    FastAPI 的 HTTPBearer 依赖会自动从 Authorization header 读取；
+    前端 EventSource 连接时在 URL 中附加 ?token=xxx，同时通过 fetch 拦截器注入 header。
+
+    每次推送一个 JSON 事件，包含:
+    - tasks: 任务列表（与 /kb/upload-status 相同的序列化格式）
+    - stats: 知识库统计（文档总数、索引片段、存储空间）
+
+    推送策略：
+    - 每 1.5 秒推送一次快照
+    - 有活跃任务时持续推送，无活跃任务后再推送一次最终快照然后关闭
+    """
+    uid = current_user.uid
+
+    async def _snapshot():
+        """收集一次完整快照：任务 + 统计 + 文件列表。"""
+        tasks_raw = await asyncio.to_thread(_list_tasks, uid)
+        tasks = [_serialize_task(t) for t in tasks_raw]
+        stats = await asyncio.to_thread(_kb_stats, uid)
+        return tasks, stats
+
+    async def _event_stream():
+        import json
+        while True:
+            try:
+                tasks, stats = await _snapshot()
+                has_active = any(
+                    t["status"] not in ("completed", "failed", "cancelled")
+                    for t in tasks
+                )
+                payload = json.dumps({
+                    "success": True,
+                    "tasks": tasks,
+                    "stats": stats,
+                }, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
+                if not has_active:
+                    break
+            except Exception as e:
+                logger.warning(f"[SSE] 快照推送异常: {e}")
+                break
+            await asyncio.sleep(1.5)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _kb_stats(uid: str) -> dict:
+    """从 PG 查询知识库实时统计：文档总数、索引片段总数、存储空间总大小。
+
+    数据来源（全部来自 myagent_kb_chunks 表，按 uid 过滤）：
+    - 文档总数：COUNT(DISTINCT file_name)
+    - 索引片段：COUNT(*)
+    - 存储空间：每个文件的 file_size 在 chunk 行中冗余存储，按 file_name 去重后取 MAX 再求和
+      （用 SUM 会把同一文件的 file_size 重复累加 N 次，导致存储空间虚高）
+    """
+    if not KB_TABLE:
+        return {"doc_count": 0, "chunk_count": 0, "total_size": 0}
+    try:
+        with _kb_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        COUNT(DISTINCT file_name)              AS doc_count,
+                        COUNT(*)                               AS chunk_count,
+                        COALESCE(
+                            (SELECT SUM(max_size) FROM (
+                                SELECT MAX(file_size) AS max_size
+                                FROM {KB_TABLE}
+                                WHERE uid = %s
+                                GROUP BY file_name
+                            ) s), 0
+                        )                                     AS total_size
+                    FROM {KB_TABLE}
+                    WHERE uid = %s
+                """, (uid, uid))
+                row = cur.fetchone()
+        return {
+            "doc_count": row[0] or 0,
+            "chunk_count": row[1] or 0,
+            "total_size": int(row[2] or 0),
+        }
+    except Exception as e:
+        logger.warning(f"[KBStats] 查询统计失败: {e}")
+        return {"doc_count": 0, "chunk_count": 0, "total_size": 0}
+
+
+@router.get("/kb/stats")
+async def kb_stats(current_user: TokenData = Depends(get_current_user)):
+    """返回当前用户知识库的实时统计（直接从 PG 聚合查询，非前端计算）。
+
+    数据来源表：myagent_kb_chunks（环境变量 PG_MYAGENT_KB_TABLE）
+    - 文档总数 = COUNT(DISTINCT file_name) WHERE uid = current_user.uid
+    - 索引片段 = COUNT(*) WHERE uid = current_user.uid
+    - 存储空间 = 按文件去重后 SUM(MAX(file_size)) WHERE uid = current_user.uid
+    """
+    stats = await asyncio.to_thread(_kb_stats, current_user.uid)
+    return JSONResponse(content={"success": True, "stats": stats})
+
+
 @router.get("/kb/file/{file_name}/parents")
 async def kb_file_parents(file_name: str, current_user: TokenData = Depends(get_current_user)):
-    """返回指定文件的父块列表（internal_id='0' 的切片即为父块）。"""
+    """返回指定文件的所有切片（父块 internal_id='0' 及其子块），按 group_id 和 internal_id 排序。"""
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
@@ -750,41 +860,42 @@ async def kb_file_parents(file_name: str, current_user: TokenData = Depends(get_
                         SELECT
                             chunk_index,
                             group_id,
+                            internal_id,
                             child_content AS content,
                             parent_content AS related_content,
                             upload_time
                         FROM {KB_TABLE}
                         WHERE file_name = %s
-                          AND internal_id = '0'
-                        ORDER BY chunk_index ASC
+                        ORDER BY group_id ASC, internal_id ASC
                     """, (file_name,))
                 else:
                     cur.execute(f"""
                         SELECT
                             chunk_index,
                             group_id,
+                            internal_id,
                             child_content AS content,
                             parent_content AS related_content,
                             upload_time
                         FROM {KB_TABLE}
                         WHERE file_name = %s
-                          AND internal_id = '0'
                           AND uid = %s
-                        ORDER BY chunk_index ASC
+                        ORDER BY group_id ASC, internal_id ASC
                     """, (file_name, uid))
                 rows = cur.fetchall()
 
-        parents = [
+        chunks = [
             {
-                "chunk_index":    row[0],
-                "group_id":       row[1],
-                "content":        row[2],
-                "related_content": row[3] or "",
-                "upload_time":    row[4].isoformat() if row[4] else "",
+                "chunk_index":     row[0],
+                "group_id":        row[1],
+                "internal_id":     str(row[2]),
+                "content":         row[3],
+                "related_content": row[4] or "",
+                "upload_time":     row[5].isoformat() if row[5] else "",
             }
             for row in rows
         ]
-        return JSONResponse(content={"success": True, "parents": parents, "total": len(parents)})
+        return JSONResponse(content={"success": True, "parents": chunks, "total": len(chunks)})
     except Exception as e:
         logger.error(f"[KBFileParents] 查询失败: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})

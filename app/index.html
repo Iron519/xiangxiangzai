@@ -414,13 +414,6 @@
       background: var(--c-gray-1); border-radius: 6px;
     }
     .pending-title { font-size: 14px; font-weight: var(--fw-s); color: var(--c-text); white-space: nowrap; }
-    .pending-refresh-btn {
-      width: 28px; height: 28px; border-radius: var(--r-full); border: none;
-      background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center;
-      color: var(--c-text-2); transition: all var(--dur);
-    }
-    .pending-refresh-btn:hover { background: var(--c-gray-1); color: var(--c-brand); }
-    .pending-refresh-btn.spinning svg { animation: spin-icon 1s linear infinite; }
 
     .pending-list { border: 1px solid var(--c-border); border-radius: 6px; }
     .pending-item {
@@ -606,29 +599,42 @@
     .small-btn.btn-secondary:hover { background: var(--c-gray-1); border-color: var(--c-gray-4); }
 
     /* ── Chunk Cards ── */
-    .chunk-list { display: flex; flex-direction: column; gap: 16px; }
-    .chunk-card { border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
-    .chunk-card-header {
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 16px; background: var(--c-gray-1); border-bottom: 1px solid var(--c-border);
-    }
-    .chunk-card-body { padding: 12px 16px; }
-    .chunk-section-title { font-size: 13px; font-weight: var(--fw-s); color: var(--c-brand); margin-bottom: 6px; }
-    .chunk-content-block {
+    .chunk-list { display: flex; flex-direction: column; gap: 6px; }
+    .chunk-card { border: 1px solid var(--c-border); border-radius: 6px; overflow: visible; position: relative; }
+    .chunk-card-body { padding: 8px 12px; position: relative; }
+    .chunk-md-content {
       background: var(--c-gray-1); border: 1px solid var(--c-border); border-radius: 6px;
-      padding: 12px; font-size: 13px; line-height: 1.6; color: var(--c-text);
-      overflow-x: auto; white-space: pre-wrap; word-break: break-word;
-      max-height: 200px; overflow-y: auto; margin: 0;
-      font-family: var(--ff-mono);
+      padding: 10px 14px; font-size: 13px; line-height: 1.7; color: var(--c-text);
+      max-height: 300px; overflow-y: auto; margin: 0;
     }
+    .chunk-md-content p { margin: 0.6em 0; }
+    .chunk-md-content ul, .chunk-md-content ol { margin: 0.6em 0; padding-left: 1.5em; }
+    .chunk-md-content li { margin: 0.3em 0; }
+    .chunk-md-content ul li { list-style-type: disc; }
+    .chunk-md-content ol li { list-style-type: decimal; }
+    .chunk-md-content code { font-family: var(--ff-mono); font-size: 0.9em; background: var(--c-card); padding: 0.15em 0.4em; border-radius: var(--r-sm); }
+    .chunk-md-content pre { background: var(--c-card); padding: 12px; border-radius: var(--r-md); overflow-x: auto; margin: 0.8em 0; }
+    .chunk-md-content pre code { background: transparent; padding: 0; font-size: 0.85em; }
+    .chunk-md-content blockquote { border-left: 3px solid var(--c-brand); padding-left: 12px; margin: 0.8em 0; color: var(--c-text-2); font-style: italic; }
+    .chunk-md-content table { border-collapse: collapse; width: 100%; margin: 0.8em 0; font-size: 0.9em; }
+    .chunk-md-content th, .chunk-md-content td { border: 1px solid var(--c-border); padding: 6px 10px; text-align: left; }
+    .chunk-md-content th { background: var(--c-card); font-weight: var(--fw-s); }
+    .chunk-md-content hr { border: none; border-top: 1px solid var(--c-border); margin: 1.2em 0; }
+    .chunk-md-content img { max-width: 100%; height: auto; border-radius: var(--r-sm); margin: 0.5em 0; }
+    .chunk-md-content h1, .chunk-md-content h2, .chunk-md-content h3, .chunk-md-content h4, .chunk-md-content h5, .chunk-md-content h6 { margin: 0.8em 0 0.4em; font-weight: var(--fw-s); }
+    .chunk-md-content h1 { font-size: 1.3em; }
+    .chunk-md-content h2 { font-size: 1.2em; }
+    .chunk-md-content h3 { font-size: 1.1em; }
+    .chunk-md-content h4, .chunk-md-content h5, .chunk-md-content h6 { font-size: 1em; }
     .chunk-related-block { max-height: 400px; }
-    .chunk-related-toggle {
-      font-size: 13px; font-weight: var(--fw-m); color: var(--c-brand);
-      cursor: pointer; display: flex; align-items: center; gap: 4px;
-      margin-top: 8px; padding: 6px 0;
+    .chunk-parent-btn {
+      position: absolute; top: 6px; right: 8px; z-index: 2;
+      width: 26px; height: 26px; border-radius: var(--r-full); border: 1px solid var(--c-border);
+      background: var(--c-card); cursor: pointer; display: flex; align-items: center; justify-content: center;
+      color: var(--c-text-3); transition: all var(--dur);
     }
-    .chunk-related-toggle:hover { color: var(--c-brand-dark); }
-    .chunk-related-content { display: none; margin-top: 8px; }
+    .chunk-parent-btn:hover { background: var(--c-secondary); color: var(--c-brand); border-color: var(--c-brand); }
+    .chunk-related-content { display: none; margin-top: 6px; }
     .chunk-related-content.visible { display: block; }
 
     /* ════════════ STATS DASHBOARD (Figma Design v2) ════════════ */
@@ -1058,6 +1064,8 @@
       background: var(--c-card); color: var(--c-text-3); border: 1px solid var(--c-border);
     }
     .kb-btn-icon:hover { background: var(--c-secondary); color: var(--c-text); }
+    .kb-btn-icon.spinning svg { animation: spin-icon 1s linear infinite; pointer-events: none; }
+    .kb-btn-icon.uploading svg { animation: spin-icon 1.5s linear infinite; }
     .kb-search-box {
       display: flex; align-items: center; gap: 8px;
       padding: 0 12px; height: 40px; border-radius: var(--r-md);
@@ -1289,11 +1297,8 @@
         <div class="kb-page-header-actions">
           <div class="kb-search-box">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <input type="text" id="kbSearchInput" placeholder="搜索文件名..." oninput="filterFileList()">
+            <input type="text" id="kbSearchInput" placeholder="搜索文件名" oninput="filterFileList()">
           </div>
-          <button class="kb-upload-btn kb-btn-icon" onclick="loadFileList()" title="刷新">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-          </button>
           <button class="kb-upload-btn kb-btn-icon" id="uploadFab" type="button" title="上传文件">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
           </button>
@@ -1313,7 +1318,7 @@
                 </div>
                 <div class="kb-kpi-card">
                   <div class="kb-kpi-icon-box">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v18"/><path d="M15 3v18"/><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/></svg>
                   </div>
                   <div>
                     <div class="kb-kpi-value-row"><span class="kb-kpi-value" id="kbKpiChunkCount">0</span><span class="kb-kpi-unit">条</span></div>
@@ -1335,9 +1340,6 @@
               <div class="step-section" id="pendingSection" style="display:none;margin-bottom:12px">
                 <div class="step-header" style="margin-bottom:8px">
                   <span class="step-title" id="pendingTitle">上传状态</span>
-                  <button class="pending-refresh-btn" id="pendingRefreshBtn" onclick="pollUploadStatus()">
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7a5 5 0 1 0 1-3M2 2v3h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  </button>
                 </div>
                 <div class="pending-list" id="pendingList"></div>
               </div>
@@ -1548,9 +1550,6 @@
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path><path d="M8 14h.01"></path><path d="M12 14h.01"></path><path d="M16 14h.01"></path><path d="M8 18h.01"></path><path d="M12 18h.01"></path><path d="M16 18h.01"></path></svg>
                       <span id="dmDateLabel">最近 7 天</span>
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="m6 9 6 6 6-6"></path></svg>
-                    </button>
-                    <button class="dm-btn dm-btn-icon" id="statsRefreshBtn" title="刷新数据">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
                     </button>
                     <button class="dm-btn dm-btn-icon" id="dmExportBtn" title="导出数据">
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>
@@ -2026,6 +2025,8 @@
   });
 
   async function doUpload(file, overwrite) {
+    const uploadBtn = document.getElementById('uploadFab');
+    if (uploadBtn) uploadBtn.classList.add('uploading');
     const formData = new FormData();
     formData.append('file', file);
     const displayName = renameInput.value.trim();
@@ -2068,6 +2069,8 @@
       loadFileList();
     } catch (err) {
       await showAlert('上传失败', err.message);
+    } finally {
+      if (uploadBtn) uploadBtn.classList.remove('uploading');
     }
   }
   let _overwriteNext = false;
@@ -2179,8 +2182,9 @@
     }
   }
 
-  // ==================== 上传状态轮询 ====================
-  let _pollTimer = null;
+  // ==================== 上传状态 SSE（Server-Sent Events） ====================
+  let _sseEventSource = null;
+  let _sseReconnectTimer = null;
   const STATUS_LABEL = {
     saving:'保存中', parsing:'解析中', parsed:'解析完成',
     chunking:'切片中', embedding:'向量化中', ingesting:'入库中', completed:'注入完成', failed:'失败',
@@ -2221,43 +2225,98 @@
     requestAnimationFrame(_tickProgress);
   }
 
-  function startPolling() {
-    // 无论是否已在轮询，都立即拉一次状态（确保新上传立即显示），再按需启动定时轮询
-    pollUploadStatus();
-    if (_pollTimer) return;
-    _pollTimer = setInterval(pollUploadStatus, 1500);
+  // SSE 连接管理
+  function startSSE() {
+    // 关闭已有连接
+    stopSSE();
+    const token = getAccessToken();
+    if (!token) return;
+    // EventSource 不支持自定义 header，token 通过 URL query 传递
+    _sseEventSource = new EventSource(`/kb/upload-sse?token=${encodeURIComponent(token)}`);
+    _sseEventSource.onmessage = function(event) {
+      try {
+        const data = JSON.parse(event.data);
+        if (!data.success) return;
+        handleSSEData(data);
+      } catch (e) { /* ignore parse errors */ }
+    };
+    _sseEventSource.onerror = function() {
+      stopSSE();
+      // 3 秒后自动重连（如果页面上有活跃任务缓存）
+      const cached = Store.get('uploadTasks', []);
+      const hasActive = cached.some(t => !['completed','failed','cancelled'].includes(t.status));
+      if (hasActive) {
+        _sseReconnectTimer = setTimeout(startSSE, 3000);
+      }
+    };
   }
 
+  function stopSSE() {
+    if (_sseReconnectTimer) { clearTimeout(_sseReconnectTimer); _sseReconnectTimer = null; }
+    if (_sseEventSource) { _sseEventSource.close(); _sseEventSource = null; }
+  }
+
+  // 处理 SSE 推送的数据：更新任务列表 + 统计卡片 + 按需刷新文件列表
+  let _lastFileListRefreshTs = 0;
+  async function handleSSEData(data) {
+    const tasks = data.tasks || [];
+    const stats = data.stats || null;
+    const hasActive = tasks.some(t => !['completed','failed','cancelled'].includes(t.status));
+
+    // 缓存最新任务快照到 localStorage，刷新后可即时恢复显示（以后端为准）
+    Store.set('uploadTasks', tasks);
+
+    // pending 区展示未完结任务（completed 保留 30s 后由后端清理，此期间仍展示）
+    const pendingTasks = tasks.filter(t => t.status !== 'completed');
+    renderUploadTasks(pendingTasks);
+
+    // 实时更新统计卡片（从后端聚合查询，非前端计算）
+    if (stats) updateKpiCardsFromStats(stats);
+
+    // 文件列表刷新时机：
+    // 1. parsed（解析完成，文件已落到知识列表）
+    // 2. completed（注入完成，切片已入库）
+    // 3. 无活跃任务时最后刷新一次
+    // 节流：最多 2 秒刷新一次文件列表，避免频繁请求
+    const now = Date.now();
+    const needRefresh = tasks.some(t => ['parsed', 'completed'].includes(t.status));
+    if (needRefresh && now - _lastFileListRefreshTs > 2000) {
+      _lastFileListRefreshTs = now;
+      await loadFileList();
+    }
+
+    // 无活跃任务时：最后刷新一次文件列表 + 更新统计，然后关闭 SSE
+    if (!hasActive) {
+      await loadFileList();
+      // 最终拉一次 stats 确保数据一致
+      try {
+        const res = await apiFetch('/kb/stats');
+        const statsData = await res.json();
+        if (statsData.success && statsData.stats) updateKpiCardsFromStats(statsData.stats);
+      } catch (e) { /* ignore */ }
+      stopSSE();
+    }
+  }
+
+  // 兼容旧调用：startPolling → startSSE，pollUploadStatus → 首次拉取 + 启动 SSE
+  function startPolling() { startSSE(); }
+
   async function pollUploadStatus() {
+    // 首次加载时用 REST 拉一次快照，然后启动 SSE 持续推送
     try {
       const res = await apiFetch('/kb/upload-status');
       const data = await res.json();
       if (!data.success) return false;
-
-      const tasks = data.tasks || [];
-      const hasActive = tasks.some(t => !['completed','failed','cancelled'].includes(t.status));
-
-      // 缓存最新任务快照到 localStorage，刷新后可即时恢复显示（以后端为准）
-      Store.set('uploadTasks', tasks);
-
-      // pending 区展示未完结任务（completed 保留 30s 后由后端清理，此期间仍展示）
-      const pendingTasks = tasks.filter(t => t.status !== 'completed');
-      renderUploadTasks(pendingTasks);
-
-      // 文件列表刷新时机：
-      // 1. parsed（解析完成，文件已落到知识列表）—— 窗口短可能 miss
-      // 2. completed（注入完成，切片已入库）—— 后端保留 30s，可靠捕获
-      // 3. 无活跃任务时最后刷新一次
-      const needRefresh = tasks.some(t => ['parsed', 'completed'].includes(t.status));
-      if (needRefresh) await loadFileList();
-
-      // 无活跃任务时停止轮询
-      if (!hasActive) {
-        if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-        // 最后刷新一次文件列表确保展示最新
-        await loadFileList();
-      }
-
+      // 先拉一次 stats
+      let stats = null;
+      try {
+        const statsRes = await apiFetch('/kb/stats');
+        const statsData = await statsRes.json();
+        if (statsData.success) stats = statsData.stats;
+      } catch (e) { /* ignore */ }
+      await handleSSEData({ success: true, tasks: data.tasks, stats });
+      const hasActive = (data.tasks || []).some(t => !['completed','failed','cancelled'].includes(t.status));
+      if (hasActive) startSSE();
       return hasActive;
     } catch (e) { return false; }
   }
@@ -2267,16 +2326,13 @@
     const pendingSection = document.getElementById('pendingSection');
     const pendingList = document.getElementById('pendingList');
     const pendingTitle = document.getElementById('pendingTitle');
-    const refreshBtn = document.getElementById('pendingRefreshBtn');
     // 无上传任务时隐藏区块；有任务（进行中/排队/失败）才展示
     if (!tasks.length) {
       pendingSection.style.display = 'none';
       return;
     }
     pendingSection.style.display = 'block';
-    const hasActive = tasks.some(t => !['completed','failed'].includes(t.status));
     pendingTitle.textContent = `上传状态（${tasks.length}）`;
-    refreshBtn.classList.toggle('spinning', hasActive);
     pendingList.innerHTML = tasks.map(t => {
       const tagClass = STATUS_TAG_CLASS[t.status] || 'info';
       // 解析阶段：saving/parsing — 可中止
@@ -2381,10 +2437,10 @@
   async function restoreUploadTasks() {
     // 1. 先从缓存即时恢复进行中/排队/失败的任务（completed 不恢复，避免历史累积）
     const cached = Store.get('uploadTasks', []);
-    const restore = cached.filter(t => !['completed'].includes(t.status));    if (restore.length) renderUploadTasks(restore);
-    // 2. 立即拉后端更新真相，若有活跃任务则持续轮询
-    const hadActive = await pollUploadStatus();
-    if (hadActive) startPolling();
+    const restore = cached.filter(t => !['completed'].includes(t.status));
+    if (restore.length) renderUploadTasks(restore);
+    // 2. 立即拉后端更新真相，若有活跃任务则启动 SSE 持续推送
+    await pollUploadStatus();
   }
 
   // ==================== 知识库文件列表 ====================
@@ -2447,8 +2503,18 @@
       const kbUpdatedEl = document.getElementById('kbLastUpdated');
       if (kbUpdatedEl) kbUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
 
-      // 更新 KPI 统计卡片
-      updateKpiCards(data.files);
+      // 更新 KPI 统计卡片 —— 优先用后端 stats 接口（直接从 PG 聚合），文件列表计算作为兜底
+      try {
+        const statsRes = await apiFetch('/kb/stats');
+        const statsData = await statsRes.json();
+        if (statsData.success && statsData.stats) {
+          updateKpiCardsFromStats(statsData.stats);
+        } else {
+          updateKpiCards(data.files);
+        }
+      } catch {
+        updateKpiCards(data.files);  // stats 接口失败时用文件列表兜底
+      }
 
       if (!data.files.length) {
         emptyEl.style.display = '';
@@ -2466,9 +2532,16 @@
     }
   }
 
-  // 更新 KPI 统计卡片
+  // 更新 KPI 统计卡片 —— 从后端 /kb/stats 聚合查询结果更新（数据源：myagent_kb_chunks 表）
+  function updateKpiCardsFromStats(stats) {
+    document.getElementById('kbKpiDocCount').textContent = (stats.doc_count || 0).toLocaleString('en-US');
+    document.getElementById('kbKpiChunkCount').textContent = (stats.chunk_count || 0).toLocaleString('en-US');
+    _formatStorage(stats.total_size || 0);
+  }
+
+  // 更新 KPI 统计卡片 —— 从文件列表计算（用于 loadFileList 时同步更新，与后端 stats 互为兜底）
   function updateKpiCards(files) {
-    const docCount = files.length;
+    const docCount = files.filter(f => f.status !== 'orphan').length;  // 仅统计已入库文档
     let totalChunks = 0;
     let totalSize = 0;
     for (const f of files) {
@@ -2477,8 +2550,11 @@
     }
     document.getElementById('kbKpiDocCount').textContent = docCount.toLocaleString('en-US');
     document.getElementById('kbKpiChunkCount').textContent = totalChunks.toLocaleString('en-US');
+    _formatStorage(totalSize);
+  }
 
-    // 存储空间：自动选单位
+  // 存储空间格式化（自动选单位 B/KB/MB/GB）
+  function _formatStorage(totalSize) {
     let sizeVal, sizeUnit;
     if (totalSize >= 1024 * 1024 * 1024) {
       sizeVal = (totalSize / 1024 / 1024 / 1024).toFixed(2);
@@ -2520,6 +2596,9 @@
     const bodyEl = document.getElementById('kbFileListBody');
     const tableEl = document.getElementById('kbFileListTable');
     if (!_kbFiles.length) { tableEl.style.display = 'none'; return; }
+
+    // 确保表格可见（loadFileList 首次加载时可能隐藏了 table）
+    tableEl.style.display = '';
 
     // 应用搜索过滤
     const filtered = _kbSearchQuery
@@ -2578,7 +2657,7 @@
             <td style="text-align:center">
               <div class="row-actions" style="gap:4px" onclick="event.stopPropagation()">
                 ${isOrphan ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v18"/><path d="M15 3v18"/><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/></svg>
                 </button>`}
                 <button class="kb-action-btn" onclick="openParsedEditor('${safeFile}', '${safeName}')" title="查看全文">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>
@@ -2670,27 +2749,40 @@
       if (!data.success) throw new Error(data.error || '加载失败');
 
       if (!data.parents.length) {
-        body.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:40px 0">无父切片数据</div>';
+        body.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:40px 0">无切片数据</div>';
         return;
       }
 
-      body.innerHTML = `<div class="chunk-list">${data.parents.map(p => `
-        <div class="chunk-card">
-          <div class="chunk-card-header">
-            <span class="status-tag info" style="background:rgba(var(--c-brand-rgb),0.08);color:var(--c-brand)">父块 #${p.group_id}</span>
-            <span class="status-tag info" style="background:rgba(var(--c-brand-rgb),0.06);color:var(--c-text-2)">切片 ${p.chunk_index}</span>
-          </div>
-          <div class="chunk-card-body">
-            <div class="chunk-section-title">Content</div>
-            <pre class="chunk-content-block">${escapeHtml(p.content)}</pre>
-            <div class="chunk-related-toggle" onclick="this.nextElementSibling.classList.toggle('visible');this.querySelector('svg').style.transform=this.nextElementSibling.classList.contains('visible')?'rotate(90deg)':''">
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="transition:transform 0.2s"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-              Related Content (Parent Source)
+      // 只展示子块（internal_id != '0'），按 group_id 和 internal_id 排序
+      const children = data.parents
+        .filter(c => c.internal_id !== '0')
+        .sort((a, b) => {
+          const ga = Number(a.group_id), gb = Number(b.group_id);
+          if (ga !== gb) return ga - gb;
+          return Number(a.internal_id) - Number(b.internal_id);
+        });
+
+      if (!children.length) {
+        body.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:40px 0">无子块数据</div>';
+        return;
+      }
+
+      let html = '<div class="chunk-list">';
+      children.forEach(child => {
+        html += `
+          <div class="chunk-card">
+            <div class="chunk-card-body">
+              <button class="chunk-parent-btn" title="关联父块" onclick="this.parentNode.querySelector('.chunk-related-content').classList.toggle('visible');this.classList.toggle('active')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v18"/><path d="M15 3v18"/><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/></svg>
+              </button>
+              <div class="chunk-md-content">${renderMarkdown(child.content || '')}</div>
+              <div class="chunk-md-content chunk-related-block chunk-related-content">${renderMarkdown(child.related_content || '')}</div>
             </div>
-            <pre class="chunk-content-block chunk-related-block chunk-related-content">${escapeHtml(p.related_content || '')}</pre>
-          </div>
-        </div>
-      `).join('')}</div>`;
+          </div>`;
+      });
+      html += '</div>';
+      body.innerHTML = html;
+      enhanceMediaImages(body);
     } catch (err) {
       body.innerHTML = `<div style="text-align:center;color:var(--c-rose);padding:40px 0">加载失败：${err.message}</div>`;
     }
@@ -3315,10 +3407,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     if (sessionId) {
       restoreChatFromServer(sessionId);
     }
-    // 启动上传任务常驻轮询（每 3 秒刷新一次）
-    if (window._uploadPollTimer) clearInterval(window._uploadPollTimer);
-    window._uploadPollTimer = setInterval(pollUploadStatus, 3000);
-    // 立即执行一次，首屏即显示
+    // 启动上传任务 SSE 监听（有活跃任务时自动推送，无活跃任务时自动关闭）
     pollUploadStatus();
   }
 
@@ -3890,16 +3979,18 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
 
   function fmtCompact(n) {
     n = Number(n) || 0;
-    if (n >= 1e6) return (n / 1e6).toFixed(2);
-    if (n >= 1e4) return (n / 1e3).toFixed(1) + 'K';
-    return String(n);
+    if (n >= 1e9) return (n / 1e9).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + 'B';
+    if (n >= 1e6) return (n / 1e6).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + 'M';
+    if (n >= 1e4) return (n / 1e3).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + 'K';
+    return n.toLocaleString('en-US');
   }
 
   function fmtTokenCompact(n) {
     n = Number(n) || 0;
-    if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
-    return String(n);
+    if (n >= 1e9) return (n / 1e9).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + 'B';
+    if (n >= 1e6) return (n / 1e6).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + 'M';
+    if (n >= 1e3) return (n / 1e3).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + 'K';
+    return n.toLocaleString('en-US');
   }
 
   function renderKPI(data) {
@@ -3911,7 +4002,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const kpiItems = [
       { value: (t.total_users || 0).toLocaleString(), unit: '人', label: '使用人数', icon: iconUsers },
       { value: (t.total_messages || 0).toLocaleString(), unit: '条', label: '问答条数', icon: iconMsg },
-      { value: fmtCompact(t.total_tokens), unit: t.total_tokens >= 1e6 ? 'M' : '', label: 'Token消耗', icon: iconCpu },
+      { value: fmtCompact(t.total_tokens), unit: '', label: 'Token消耗', icon: iconCpu },
       { value: ((t.avg_duration_ms||0)/1000).toFixed(1), unit: '秒', label: '平均耗时', icon: iconClock },
     ];
     document.getElementById('kpiGrid').innerHTML = kpiItems.map(item => `
@@ -4088,7 +4179,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
           <div class="dm-neg-reason-item">
             <div class="dm-neg-reason-header">
               <span class="dm-neg-reason-name">${r.reason}</span>
-              <span class="dm-neg-reason-count">${r.count} 次</span>
+              <span class="dm-neg-reason-count">${(r.count || 0).toLocaleString('en-US')} 次</span>
               <span class="dm-neg-reason-percent">${r.percent}%</span>
             </div>
             <div class="dm-neg-reason-bar-wrap">
@@ -4133,7 +4224,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   }
 
   initDatePicker();
-  document.getElementById('statsRefreshBtn').addEventListener('click', loadStats);
 
   document.getElementById('dmTrendTabs').addEventListener('click', (e) => {
     const tab = e.target.closest('.dm-trend-tab');

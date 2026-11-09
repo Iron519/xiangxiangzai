@@ -70,8 +70,8 @@ class EmbeddingModel:
 
         logger.info(f"[Embedding] 开始向量化，文本数: {len(clean_texts)}")
         vectors: list[list[float]] = []
-        max_chars_per_batch = 800
-        max_chars_single = 800
+        max_chars_per_batch = 5000
+        max_chars_single = 5000
         current_batch: list[str] = []
         current_chars = 0
 

@@ -115,3 +115,17 @@ async def get_current_user_optional(
         return decode_access_token(credentials.credentials)
     except HTTPException:
         return None
+
+
+async def get_current_user_sse(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
+    token: str = "",
+) -> TokenData:
+    """SSE 专用鉴权：先尝试 Authorization header，失败后从 query 参数 ?token=xxx 读取。
+    EventSource 不支持自定义 header，因此 SSE 端点需要此 fallback。
+    """
+    if credentials:
+        return decode_access_token(credentials.credentials)
+    if token:
+        return decode_access_token(token)
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
