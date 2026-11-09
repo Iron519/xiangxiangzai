@@ -146,6 +146,7 @@ def _to_record(chunk: SemanticChunkOutput) -> dict[str, Any]:
         "file_path": chunk.file_path,
         "file_name": chunk.file_name,
         "text_hash": chunk.text_hash,
+        "file_size": chunk.file_size,
         "group_id": chunk.group_id,
         "internal_id": chunk.internal_id,
         "parent_content": chunk.parent_content,
@@ -307,6 +308,7 @@ def _upsert_chunks(
     """执行 UPSERT 并返回 (inserted, updated, affected_chunk_indexes)。"""
     insert_columns = (
         "chunk_index", "uid", "original_name", "child_content", "file_path", "file_name", "text_hash",
+        "file_size",
         "group_id", "internal_id", "parent_content", "related_image_url",
         "embedding", "embedding_dim",
         "upload_time", "update_time", "expire_time", "if_show",

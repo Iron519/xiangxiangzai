@@ -1940,7 +1940,7 @@
 
   const SIDEBAR_NAV = [
     { id: 'chat', label: '聊天', icon: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>' },
-    { id: 'knowledge', label: '知识库', icon: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>' },
+    { id: 'knowledge', label: '知识库', icon: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>' },
     { id: 'stats', label: '数据监控', icon: '<path d="M12 16v5"/><path d="M16 14v7"/><path d="M20 10v11"/><path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15"/><path d="M4 18v3"/><path d="M8 14v7"/>' },
     { id: 'faq', label: '对话洞察', icon: '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>' },
   ];
@@ -3117,14 +3117,11 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     if (!canAccess(currentPage)) currentPage = 'chat';
     switchPage(currentPage);
     restoreChat();
-    initPlaceholderTypewriter();
     // 启动上传任务常驻轮询（每 3 秒刷新一次）
     if (window._uploadPollTimer) clearInterval(window._uploadPollTimer);
     window._uploadPollTimer = setInterval(pollUploadStatus, 3000);
     // 立即执行一次，首屏即显示
     pollUploadStatus();
-    // 启动进度条动画（阶段内平滑前向爬升）
-    startProgressAnimator();
   }
 
   // ==================== 输入框占位符打字机效果 ====================
@@ -3144,7 +3141,9 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       }
       if (isDeleting) {
         charIndex--;
-        if (charIndex < 0) {
+        if (charIndex <= 0) {
+          charIndex = 0;
+          textarea.setAttribute('placeholder', '');
           isDeleting = false;
           phraseIndex = (phraseIndex + 1) % phrases.length;
           setTimeout(type, 500);
@@ -3152,7 +3151,8 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
         }
       } else {
         charIndex++;
-        if (charIndex > currentPhrase.length) {
+        if (charIndex >= currentPhrase.length) {
+          charIndex = currentPhrase.length;
           isPaused = true;
           setTimeout(type, 100);
           return;
@@ -3980,6 +3980,10 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     _userMenu.classList.remove('open');
     showConfirm('退出登录', '确定要退出登录吗？', '', '退出').then(ok => { if (ok) webLogout(); });
   });
+
+  // ==================== 一次性 UI 初始化（页面加载只跑一次，与登录态无关） ====================
+  initPlaceholderTypewriter();
+  startProgressAnimator();
 
   // 启动：SSO 回调检测 / 登录态校验 / 跳登录
   bootstrap();

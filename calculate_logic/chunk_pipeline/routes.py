@@ -367,6 +367,9 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
             await rewrite_chunks_with_coref(semantic_chunks)
+            _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
+            for sc in semantic_chunks:
+                sc.file_size = _file_size
             await asyncio.to_thread(
                 _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
                 **{"semantic_chunks": len(semantic_chunks)},
@@ -446,6 +449,9 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
             await rewrite_chunks_with_coref(semantic_chunks)
+            _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
+            for sc in semantic_chunks:
+                sc.file_size = _file_size
             await asyncio.to_thread(
                 _set_task_status, task_id, UPLOAD_STATUS_EMBEDDING,
                 **{"semantic_chunks": len(semantic_chunks)},
@@ -626,7 +632,8 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
                             COUNT(*)                                          AS total_chunks,
                             COUNT(DISTINCT k.group_id)                        AS parent_chunks,
                             MIN(k.upload_time)                                AS upload_time,
-                            MAX(k.update_time)                                AS last_update
+                            MAX(k.update_time)                                AS last_update,
+                            COALESCE(MAX(k.file_size), 0)                     AS file_size
                         FROM {KB_TABLE} k
                         LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
                         GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
@@ -641,7 +648,8 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
                             COUNT(*)                                          AS total_chunks,
                             COUNT(DISTINCT k.group_id)                        AS parent_chunks,
                             MIN(k.upload_time)                                AS upload_time,
-                            MAX(k.update_time)                                AS last_update
+                            MAX(k.update_time)                                AS last_update,
+                            COALESCE(MAX(k.file_size), 0)                     AS file_size
                         FROM {KB_TABLE} k
                         LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
                         WHERE k.uid = %s
@@ -679,7 +687,7 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
                 "file_name":      row[0],
                 "original_name":  row[1],
                 "file_path":      row[2],
-                "file_size":      _disk_size_by_path(row[2]) or _disk_size(row[0], row[2].split("/")[-2] if "/" in row[2] else uid),
+                "file_size":      row[7] or _disk_size_by_path(row[2]) or _disk_size(row[0], row[2].split("/")[-2] if "/" in row[2] else uid),
                 "total_chunks":   row[3],
                 "parent_chunks":  row[4],
                 "upload_time":    row[5].isoformat() if row[5] else "",

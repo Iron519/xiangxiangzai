@@ -56,6 +56,7 @@ DDL_STATEMENTS = [
         file_path             TEXT NOT NULL,
         file_name             TEXT NOT NULL,
         text_hash             TEXT NOT NULL,
+        file_size             BIGINT DEFAULT 0,
         metadata              JSONB DEFAULT '{{}}',
         group_id              BIGINT DEFAULT 0,
         internal_id           TEXT DEFAULT '',
@@ -72,6 +73,8 @@ DDL_STATEMENTS = [
         UNIQUE (uid, file_name, text_hash)
     )
     """,
+    # ─── 增量迁移：为已存在的表补充 file_size 列 ───
+    f"ALTER TABLE {KB_TABLE} ADD COLUMN IF NOT EXISTS file_size BIGINT DEFAULT 0",
     f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_content_tsv ON {KB_TABLE} USING gin (content_tsv)",
     f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_uid ON {KB_TABLE} (uid)",
     f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_file_hash ON {KB_TABLE} (uid, file_name, text_hash)",

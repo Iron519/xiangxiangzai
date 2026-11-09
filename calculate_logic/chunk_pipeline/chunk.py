@@ -44,6 +44,7 @@ class SemanticChunkOutput(BaseModel):
     file_path: str = Field(description="源文件路径")
     file_name: str = Field(description="源文件名")
     text_hash: str = Field(description="内容哈希值")
+    file_size: int = Field(default=0, description="源文件大小（字节）")
     group_id: int = Field(description="父块ID")
     internal_id: str = Field(description="父块内部子块ID")
     parent_content: str = Field(description="关联内容，如父块、QA的答案")
