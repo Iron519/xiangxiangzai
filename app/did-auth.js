@@ -41,11 +41,25 @@
     m.style.display = 'flex';
     _authMode = 'login';
     switchAuthTab('password');
+    clearAuthForm();
   }
 
   function closeLogin() {
     const m = getEl('authModal');
     if (m) m.style.display = 'none';
+  }
+
+  function clearAuthForm() {
+    const u = getEl('authUsername');
+    const p = getEl('authPwd');
+    const cp = getEl('authConfirmPwd');
+    const r = getEl('authApplyReason');
+    const h = getEl('authPwdHint');
+    if (u) u.value = '';
+    if (p) p.value = '';
+    if (cp) cp.value = '';
+    if (r) r.value = '';
+    if (h) h.textContent = '';
   }
 
   let _authMode = 'login';
@@ -93,6 +107,8 @@
     if (pwdLoginBtn) pwdLoginBtn.style.display = 'none';
     if (switchRegisterBtn) switchRegisterBtn.style.display = 'none';
     if (doRegisterBtn) doRegisterBtn.style.display = '';
+    const hint = getEl('authPwdHint');
+    if (hint) hint.textContent = '';
   }
 
   // 账号密码登录
@@ -161,8 +177,10 @@
         return;
       }
       if (hint) hint.textContent = '申请已提交，请等待管理员批准后登录';
-      // 注册成功后切回登录模式
-      setTimeout(() => switchAuthTab('password'), 2000);
+      setTimeout(() => {
+        switchAuthTab('password');
+        clearAuthForm();
+      }, 2000);
     } catch (e) {
       if (hint) hint.textContent = '注册失败：' + e.message;
     }
@@ -204,17 +222,46 @@
     const nameEl = document.getElementById('appUserName');
     const avatarEl = document.getElementById('sidebarUserAvatar');
     if (currentUser && currentUser.uid) {
-      nameEl.textContent = currentUser.username || currentUser.uid;
-      box.style.display = 'flex';
+      if (nameEl) nameEl.textContent = currentUser.username || currentUser.uid;
+      if (box) box.style.display = 'flex';
       if (avatarEl) {
         const initial = (currentUser.username || currentUser.uid || 'U').charAt(0).toUpperCase();
         avatarEl.textContent = initial;
       }
     } else {
-      box.style.display = 'none';
+      if (box) box.style.display = 'none';
     }
   }
 
   function applyRolePermissions() {
     // 无 RBAC，所有页面可见，无需处理
+  }
+
+  // ==================== 认证弹窗交互增强 ====================
+  // Enter 键提交：登录模式下回车=登录，注册模式下回车=注册
+  function _authOnEnter(e) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (_authMode === 'register') {
+      passwordRegister();
+    } else {
+      passwordLogin();
+    }
+  }
+  ['authUsername', 'authPwd', 'authConfirmPwd', 'authApplyReason'].forEach(id => {
+    const el = getEl(id);
+    if (el) el.addEventListener('keydown', _authOnEnter);
+  });
+
+  // 点击遮罩关闭时：未登录不允许关闭（防止页面空白无入口）
+  const _authModalEl = getEl('authModal');
+  if (_authModalEl) {
+    _authModalEl.addEventListener('click', (e) => {
+      if (e.target === _authModalEl && !getAccessToken()) {
+        return;
+      }
+      if (e.target === _authModalEl) {
+        closeLogin();
+      }
+    });
   }
