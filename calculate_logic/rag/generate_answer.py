@@ -34,7 +34,7 @@ config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # 安全 fallback：spawn 模式下 load_dotenv 可能未生效
 SESSIONS_TABLE = config.get("PG_MYAGENT_SESSIONS_TABLE") or os.getenv("PG_MYAGENT_SESSIONS_TABLE", "") or "myagent_sessions"
-CONV_TABLE = config.get("PG_MYAGENT_CONVERSATIONS_TABLE") or os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "") or "myagent_conversations_history_mgmt"
+CONV_TABLE = config.get("PG_MYAGENT_CONVERSATIONS_TABLE") or os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "") or "myagent_conversations_history"
 
 # ================= 运行路径配置 ===============
 PROJECT_ROOT = config['WORK_PATH']

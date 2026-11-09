@@ -427,6 +427,21 @@ def _collect_atomic_units(text: str) -> list[str]:
     return units
 
 
+_EMBED_BATCH_LIMIT = 20
+
+
+async def _embed_batched(
+    texts: list[str], embedder: EmbeddingFunction,
+) -> list[list[float]]:
+    """分批调用 embedder，每批不超过 _EMBED_BATCH_LIMIT 条，防止 API batch size 超限。"""
+    all_vectors: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_BATCH_LIMIT):
+        batch = texts[i:i + _EMBED_BATCH_LIMIT]
+        vectors = await embedder(batch)
+        all_vectors.extend(vectors)
+    return all_vectors
+
+
 async def _split_parent_semantically(
     content: str, *, similarity_threshold: float, embedder: EmbeddingFunction,
 ) -> list[str]:
@@ -441,7 +456,7 @@ async def _split_parent_semantically(
     if len(units) == 1:
         return [units[0]]
 
-    embeddings = await embedder(units)
+    embeddings = await _embed_batched(units, embedder)
     merged_units = _merge_semantic_units(units, embeddings, similarity_threshold=similarity_threshold)
     return _merge_short_chunks(merged_units, min_length=_MIN_CHUNK_LENGTH)
 
@@ -469,7 +484,7 @@ async def build_semantic_chunks(
             father.child_content, similarity_threshold=similarity_threshold, embedder=embedder,
         )
         logger.info(f"父块 {father.chunk_index} 切分得到子块数: {len(child_texts)}")
-        embeddings = await embedder(child_texts)
+        embeddings = await _embed_batched(child_texts, embedder)
 
         for child_order, (child_text, embedding) in enumerate(zip(child_texts, embeddings, strict=True)):
             normalized_child = child_text.strip()

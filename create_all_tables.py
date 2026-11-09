@@ -6,14 +6,22 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user_mgmt")
+USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks_mgmt")
-CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history_mgmt")
+KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks")
+CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history")
 SESSION_TABLE = os.getenv("PG_MYAGENT_SESSIONS_TABLE", "myagent_sessions")
-TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks_mgmt")
-FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
+TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
+FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq")
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
+
+OLD_TABLES = [
+    "myagent_user_mgmt",
+    "myagent_kb_chunks_mgmt",
+    "myagent_conversations_history_mgmt",
+    "myagent_upload_tasks_mgmt",
+    "myagent_faq_mgmt",
+]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 
 
@@ -28,6 +36,9 @@ def _conn():
 
 
 DDL_STATEMENTS = [
+    # ─── 删除旧的 _mgmt 后缀表 ───
+    *[f"DROP TABLE IF EXISTS {t} CASCADE" for t in OLD_TABLES],
+
     # ─── 用户表：uid 为5位数字编号，自增序列 ───
     "CREATE SEQUENCE IF NOT EXISTS user_uid_seq START 1",
     f"""

@@ -228,7 +228,7 @@ def _cleanup_task_artifacts(save_path: str, uid: str = "") -> dict:
 
 
 def _list_tasks(uid: str | None = None) -> list[dict[str, Any]]:
-    """列出任务（可按 uid 过滤），已完成的任务保留 5 分钟后自动清理。"""
+    """列出任务（可按 uid 过滤），已完成的任务保留 30 秒后自动清理。"""
     tasks: list[dict[str, Any]] = []
     expired_ids: list[str] = []
     try:
@@ -242,11 +242,14 @@ def _list_tasks(uid: str | None = None) -> list[dict[str, Any]]:
                 else:
                     cur.execute(f"SELECT * FROM {UPLOAD_TASKS_TABLE} ORDER BY created_at DESC")
                 colnames = [desc[0] for desc in cur.description]
+                now_utc = datetime.now(timezone.utc)
                 for row in cur.fetchall():
                     record = dict(zip(colnames, row))
                     if record.get("status") == UPLOAD_STATUS_COMPLETED:
-                        expired_ids.append(record["task_id"])
-                        continue
+                        updated_at = record.get("updated_at")
+                        if updated_at and (now_utc - updated_at).total_seconds() > 30:
+                            expired_ids.append(record["task_id"])
+                            continue
                     tasks.append(record)
             # 清理过期已完成任务
             if expired_ids:
@@ -423,7 +426,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
     try:
         async with _upload_sem:
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
-            merged_text = _read_merged_md(save_path, uid)
+            merged_text = _read_merged_md(save_path, uid, original_name)
             if not merged_text.strip():
                 raise RuntimeError("merged.md 为空，无法重新切片。请先在编辑页输入内容并保存。")
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSED,
@@ -458,7 +461,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             )
 
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
-            KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks_mgmt")
+            KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks")
             try:
                 with _kb_conn() as conn:
                     with conn.cursor() as cur:
@@ -619,43 +622,25 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
-    is_admin = current_user.is_admin
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                if is_admin:
-                    cur.execute(f"""
-                        SELECT
-                            k.file_name,
-                            COALESCE(k.original_name, t.original_name, k.file_name) AS original_name,
-                            k.file_path,
-                            COUNT(*)                                          AS total_chunks,
-                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
-                            MIN(k.upload_time)                                AS upload_time,
-                            MAX(k.update_time)                                AS last_update,
-                            COALESCE(MAX(k.file_size), 0)                     AS file_size
-                        FROM {KB_TABLE} k
-                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
-                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
-                        ORDER BY MIN(k.upload_time) DESC
-                    """)
-                else:
-                    cur.execute(f"""
-                        SELECT
-                            k.file_name,
-                            COALESCE(k.original_name, t.original_name, k.file_name) AS original_name,
-                            k.file_path,
-                            COUNT(*)                                          AS total_chunks,
-                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
-                            MIN(k.upload_time)                                AS upload_time,
-                            MAX(k.update_time)                                AS last_update,
-                            COALESCE(MAX(k.file_size), 0)                     AS file_size
-                        FROM {KB_TABLE} k
-                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
-                        WHERE k.uid = %s
-                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
-                        ORDER BY MIN(k.upload_time) DESC
-                    """, (uid,))
+                cur.execute(f"""
+                    SELECT
+                        k.file_name,
+                        COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
+                        k.file_path,
+                        COUNT(*)                                          AS total_chunks,
+                        COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                        MIN(k.upload_time)                                AS upload_time,
+                        MAX(k.update_time)                                AS last_update,
+                        COALESCE(MAX(k.file_size), 0)                     AS file_size
+                    FROM {KB_TABLE} k
+                    LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                    WHERE k.uid = %s
+                    GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
+                    ORDER BY MIN(k.upload_time) DESC
+                """, (uid,))
                 rows = cur.fetchall()
                 # 任务记录里的 save_name，用于区分"正在处理中"与"真孤儿"
                 cur.execute(f"SELECT save_name, status, created_at FROM {UPLOAD_TASKS_TABLE}")
@@ -705,17 +690,11 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
             FRESH_GRACE_SECS = 120
             # 从任务表取 save_name -> original_name 映射
             task_name_map = {r[0]: r[1] for r in task_rows if r[0] and r[1]} if task_rows else {}
-            # admin 扫描所有 uid 子目录，普通用户只扫自己的
+            # 只扫描当前用户的 upload_kb/{uid}/ 目录
             scan_dirs = []
-            if is_admin:
-                for d in sorted(os.listdir(UPLOAD_DIR)):
-                    full_d = UPLOAD_DIR / d
-                    if full_d.is_dir() and not d.startswith("."):
-                        scan_dirs.append((d, full_d))
-            else:
-                uid_dir = UPLOAD_DIR / uid
-                if uid_dir.is_dir():
-                    scan_dirs.append((uid, uid_dir))
+            uid_dir = UPLOAD_DIR / uid
+            if uid_dir.is_dir():
+                scan_dirs.append((uid, uid_dir))
             for dir_uid, scan_dir in scan_dirs:
                 for name in sorted(os.listdir(scan_dir)):
                     if name.startswith(".") or name == ".gitkeep":
@@ -1048,7 +1027,7 @@ def _kb_file_row(file_name: str) -> dict[str, Any] | None:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT k.file_name, k.file_path, "
-                    f"COALESCE(t.original_name, k.file_name) AS original_name, "
+                    f"COALESCE(t.original_name, k.original_name, k.file_name) AS original_name, "
                     f"k.expire_time, k.if_show, k.uid, t.uid AS task_uid "
                     f"FROM {KB_TABLE} k "
                     f"LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name "
@@ -1066,17 +1045,19 @@ def _kb_file_row(file_name: str) -> dict[str, Any] | None:
         return None
 
 
-def _merged_md_path(file_path: str, uid: str = "") -> Path:
+def _merged_md_path(file_path: str, uid: str = "", original_name: str = "") -> Path:
     """由入库源文件的物理路径，推算其 parse_result 产物目录下的 merged.md。
     约定：parse_result/{uid}/{file_stem}/merged.md
+    解析器优先用 display_name(original_name) 做目录名，因此这里也优先用 original_name。
     """
-    stem = Path(file_path).stem.replace(" ", "_")
+    base_name = original_name or file_path
+    stem = Path(base_name).stem.replace(" ", "_")
     return Path(PARSE_RESULT_DIR) / uid / stem / "merged.md"
 
 
-def _read_merged_md(file_path: str, uid: str = "") -> str:
+def _read_merged_md(file_path: str, uid: str = "", original_name: str = "") -> str:
     """读取源文件对应的 merged.md 全文；不存在/读失败返回 ""。"""
-    p = _merged_md_path(file_path, uid)
+    p = _merged_md_path(file_path, uid, original_name)
     try:
         if not p.exists():
             return ""
@@ -1098,7 +1079,7 @@ async def kb_file_parsed_text(file_name: str, current_user: TokenData = Depends(
     row = _kb_file_row(file_name)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
-    text = _read_merged_md(row["file_path"], row.get("uid", ""))
+    text = _read_merged_md(row["file_path"], row.get("uid", ""), row.get("original_name", ""))
     return JSONResponse(content={
         "success": True,
         "file_name": row["file_name"],
@@ -1115,7 +1096,7 @@ async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
     row = _kb_file_row(file_name)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
-    p = _merged_md_path(row["file_path"], row.get("uid", ""))
+    p = _merged_md_path(row["file_path"], row.get("uid", ""), row.get("original_name", ""))
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:

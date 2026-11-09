@@ -50,7 +50,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= 表配置 =================
-FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq_mgmt")
+FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq")
 
 # 鉴权依赖：登录即可访问
 

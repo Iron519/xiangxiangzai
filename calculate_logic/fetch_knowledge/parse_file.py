@@ -159,19 +159,34 @@ class DocumentParser:
 
             async def _process_one_page(page_info):
                 page_no = page_info["page_no"]
-                page_context = await minur_u_process.prepare_one_page_before_process(page_info)
-                logger.info(f"--- 正在处理 PDF 第 {page_no}/{len(page_files)} 页 ---")
-                if page_context["is_image_only"]:
-                    logger.info(f"第 {page_no} 页为纯图片，启用整页 VLM 识别并建整页图锚点...")
-                else:
-                    logger.info(f"第 {page_no} 页为正常 PDF，启用 MinerU 提取...")
-                page_json = await minur_u_process.process_one_page(page_context)
-                if page_json is None:
-                    logger.error(f"第 {page_no} 页 MinerU 返回 None")
-                    page_json = {
+                try:
+                    page_context = await minur_u_process.prepare_one_page_before_process(page_info)
+                    logger.info(f"--- 正在处理 PDF 第 {page_no}/{len(page_files)} 页 ---")
+                    if page_context["is_image_only"]:
+                        logger.info(f"第 {page_no} 页为纯图片，启用整页 VLM 识别并建整页图锚点...")
+                    else:
+                        logger.info(f"第 {page_no} 页为正常 PDF，启用 MinerU 提取...")
+                    page_json = await minur_u_process.process_one_page(page_context)
+                    if page_json is None:
+                        logger.error(f"第 {page_no} 页 MinerU 返回 None")
+                        page_json = {
+                            "page_no": page_no,
+                            "is_image_only": False,
+                            "debug_info": {"error": "MinerU 返回 None"},
+                            "md_content": "",
+                            "content_list": [],
+                            "middle_json": None,
+                            "image_desc_map": {},
+                            "anchors": [],
+                            "filters": [],
+                        }
+                    return page_json
+                except Exception as e:
+                    logger.error(f"第 {page_no} 页解析失败，跳过该页: {e}")
+                    return {
                         "page_no": page_no,
                         "is_image_only": False,
-                        "debug_info": {"error": "MinerU 返回 None"},
+                        "debug_info": {"error": str(e)},
                         "md_content": "",
                         "content_list": [],
                         "middle_json": None,
@@ -179,7 +194,6 @@ class DocumentParser:
                         "anchors": [],
                         "filters": [],
                     }
-                return page_json
 
             all_page_results = await asyncio.gather(*[_process_one_page(pf) for pf in page_files])
             merged = minur_u_process.merge_page_results(all_page_results)

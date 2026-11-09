@@ -40,8 +40,8 @@ def ensure_logger_handler():
 
 _mineru_http_client: httpx.AsyncClient | None = None
 _vlm_async_client: AsyncOpenAI | None = None
-# 并发上限：同时对 MinerU 提交的任务数（MinerU 无明确并发限制，但每日 1000 页优先级额度）
-_mineru_sem = asyncio.Semaphore(5)
+# 并发上限：同时对 MinerU 提交的任务数（Docker 容器内并发 DNS 查询可能丢包，限制为 2 避免瞬时 DNS 解析失败）
+_mineru_sem = asyncio.Semaphore(2)
 # VLM 并发上限（阿里云 API 限流保护）
 _vlm_sem = asyncio.Semaphore(5)
 
@@ -170,12 +170,13 @@ class MinerUProcessor:
         return page_files
 
     # =================== 2. 调用 MinerU 官方云 API v4 解析单页PDF ======================
-    async def call_mineru(self, pdf_path: str):
+    async def call_mineru(self, pdf_path: str, max_retries: int = 3):
         """调用 MinerU 官方云 API v4 解析单页 PDF，返回与旧内网接口兼容的结构：
         {"results": {<file_name>: {"md_content":..., "content_list":..., "middle_json":..., "images":{}}}}
 
         流程：提交 batch → PUT 上传文件 → 轮询结果 → 下载 zip → 解压组装
         全异步：httpx.AsyncClient + asyncio.sleep
+        网络层自动重试：DNS 解析失败 / 连接超时等瞬时错误最多重试 max_retries 次
         """
         api_base = self.mineru_api_base
         headers = {"Authorization": f"Bearer {self.mineru_token}", "Content-Type": "application/json"}
@@ -184,7 +185,7 @@ class MinerUProcessor:
 
         http = await _get_mineru_http()
 
-        # ---- 步骤1：提交 batch，获取上传 URL ----
+        # ---- 步骤1：提交 batch，获取上传 URL（带重试） ----
         submit_body = {
             "enable_formula": True,
             "language": "ch",
@@ -193,9 +194,20 @@ class MinerUProcessor:
             "model_version": "pipeline",
             "files": [{"name": file_name, "is_ocr": True, "data_id": data_id}],
         }
-        async with _mineru_sem:
-            resp = await http.post(f"{api_base}/api/v4/file-urls/batch", headers=headers, json=submit_body, timeout=60)
-            resp.raise_for_status()
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                async with _mineru_sem:
+                    resp = await http.post(f"{api_base}/api/v4/file-urls/batch", headers=headers, json=submit_body, timeout=60)
+                    resp.raise_for_status()
+                break
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+                last_err = e
+                logger.warning(f"[MinerU] 提交 batch 失败（第 {attempt+1}/{max_retries} 次）: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2 * (attempt + 1))
+        else:
+            raise RuntimeError(f"[MinerU] 提交 batch 重试 {max_retries} 次仍失败: {last_err}")
         resp_data = resp.json()
         if resp_data.get("code") != 0:
             raise RuntimeError(f"[MinerU] 提交 batch 失败: {resp_data}")

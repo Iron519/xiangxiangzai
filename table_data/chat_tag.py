@@ -1,4 +1,4 @@
-"""LLM 业务标签 + 情绪打标脚本 —— 对 myagent_conversations_history_mgmt 中 role='user' 且 tags IS NULL 的消息，
+"""LLM 业务标签 + 情绪打标脚本 —— 对 myagent_conversations_history 中 role='user' 且 tags IS NULL 的消息，
 用 LLM 进行业务标签分类和情绪标注，结果写回 tags / emotion 字段，供 Data Insight 页面统计展示。
 
 定时执行：由 app.py startup 注册 asyncio 循环，每 CHAT_TAG_INTERVAL_HOURS 小时执行一次。
@@ -41,7 +41,7 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= 配置 =================
-CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history_mgmt")
+CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history")
 TAG_INTERVAL_HOURS = float(os.getenv("CHAT_TAG_INTERVAL_HOURS", "6"))
 TAG_BATCH_SIZE = int(os.getenv("CHAT_TAG_BATCH_SIZE", "20"))
 TAG_CONCURRENCY = int(os.getenv("CHAT_TAG_CONCURRENCY", "5"))

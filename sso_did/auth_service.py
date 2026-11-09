@@ -18,7 +18,7 @@ from sso_did.auth import (
 load_dotenv(find_dotenv())
 logger = logging.getLogger("Auth")
 
-USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user_mgmt")
+USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user")
 
 
 def _pg_conn():

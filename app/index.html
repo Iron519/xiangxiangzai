@@ -1026,10 +1026,8 @@
     .kb-page { padding: 20px 24px 0; max-width: 1152px; margin: 0 auto; }
 
     .kb-page-header {
-      display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px;
-    }
-    @media (min-width: 640px) {
-      .kb-page-header { flex-direction: row; align-items: center; justify-content: space-between; }
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 32px;
     }
     .kb-page-header-left { display: flex; align-items: center; gap: 12px; }
     .kb-page-header-icon {
@@ -1039,19 +1037,41 @@
       box-shadow: 0 1px 3px rgba(0,0,0,0.08); flex-shrink: 0;
     }
     .kb-page-header-icon svg { width: 22px; height: 22px; }
-    .kb-page-header h1 {
+    .kb-page-header-left h1 {
       font-size: 24px; font-weight: var(--fw-s); color: var(--c-text);
       margin: 0; line-height: 1.3; letter-spacing: -0.02em;
     }
-    .kb-page-header-actions { display: flex; align-items: center; gap: 8px; }
+    .kb-page-header-left p {
+      font-size: 12px; color: var(--c-text-3); margin: 4px 0 0;
+    }
+    .kb-page-header-actions { display: flex; align-items: center; gap: 8px; position: relative; }
     .kb-upload-btn {
       display: inline-flex; align-items: center; gap: 6px;
-      padding: 10px 16px; border-radius: var(--r-md); border: none;
-      background: var(--c-brand); color: #fff; cursor: pointer;
-      font-size: 13px; font-weight: var(--fw-s); font-family: var(--ff);
-      transition: opacity var(--dur);
+      padding: 8px 14px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+      background: var(--c-card); color: var(--c-text-3); font-size: 12px; font-weight: var(--fw-m);
+      font-family: var(--ff); cursor: pointer; transition: all var(--dur);
     }
-    .kb-upload-btn:hover { opacity: 0.9; }
+    .kb-upload-btn:hover { background: var(--c-secondary); color: var(--c-text); }
+    .kb-upload-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .kb-btn-icon {
+      width: 40px; height: 40px; padding: 0; justify-content: center;
+      background: var(--c-card); color: var(--c-text-3); border: 1px solid var(--c-border);
+    }
+    .kb-btn-icon:hover { background: var(--c-secondary); color: var(--c-text); }
+    .kb-search-box {
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 12px; height: 40px; border-radius: var(--r-md);
+      border: 1px solid var(--c-border); background: var(--c-card);
+      color: var(--c-text-3); transition: all var(--dur);
+    }
+    .kb-search-box:focus-within { border-color: var(--c-brand); color: var(--c-brand); }
+    .kb-search-box svg { flex-shrink: 0; }
+    .kb-search-box input {
+      border: none; outline: none; background: transparent;
+      font-size: 13px; font-family: var(--ff); color: var(--c-text);
+      width: 160px;
+    }
+    .kb-search-box input::placeholder { color: var(--c-text-3); }
 
     /* KPI Cards */
     .kb-kpi-grid {
@@ -1255,25 +1275,30 @@
         <div class="page-panel" id="panel-knowledge" style="position:relative">
           <div class="page-scroll">
             <div class="kb-page">
-              <!-- 页面标题区 -->
-              <div class="kb-page-header">
-                <div class="kb-page-header-left">
-                  <div class="kb-page-header-icon">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/></svg>
-                  </div>
-                  <h1>知识库</h1>
-                </div>
-                <div class="kb-page-header-actions">
-                  <button class="kb-upload-btn" onclick="loadFileList()" title="刷新">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
-                    刷新
-                  </button>
-                  <button class="kb-upload-btn" id="uploadFab" type="button" title="上传文件">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-                    上传文件
-                  </button>
-                </div>
-              </div>
+      <!-- 页面标题区 -->
+      <div class="kb-page-header">
+        <div class="kb-page-header-left">
+          <div class="kb-page-header-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+          </div>
+          <div>
+            <h1>知识库</h1>
+            <p id="kbLastUpdated">数据更新于 —</p>
+          </div>
+        </div>
+        <div class="kb-page-header-actions">
+          <div class="kb-search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <input type="text" id="kbSearchInput" placeholder="搜索文件名..." oninput="filterFileList()">
+          </div>
+          <button class="kb-upload-btn kb-btn-icon" onclick="loadFileList()" title="刷新">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+          </button>
+          <button class="kb-upload-btn kb-btn-icon" id="uploadFab" type="button" title="上传文件">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+          </button>
+        </div>
+      </div>
 
               <!-- KPI 统计卡片 -->
               <div class="kb-kpi-grid" id="kbKpiGrid">
@@ -1339,24 +1364,13 @@
 
               <div id="kbFileListTable" style="display:none">
                 <div class="kb-file-list-card">
-                  <div class="kb-file-list-header">
-                    <div>
-                      <h2>文件列表</h2>
-                      <p id="kbFileCount">共 0 份文件</p>
-                    </div>
-                    <button class="kb-upload-btn" onclick="document.getElementById('fileInput').click()">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
-                      添加文件
-                    </button>
-                  </div>
                   <table class="kb-file-table">
                     <thead><tr>
                       <th style="width:36px;text-align:center"><input type="checkbox" id="kbFileSelectAll" onchange="toggleSelectAllFiles(this.checked)" title="全选"></th>
                       <th class="th-sortable" onclick="sortFiles('name')">文件名 <span id="sortIcon-name" class="sort-arrow"></span></th>
                       <th style="width:90px;text-align:center" class="th-sortable" onclick="sortFiles('chunks')">切片数 <span id="sortIcon-chunks" class="sort-arrow"></span></th>
-                      <th style="width:90px;text-align:center">父块数</th>
                       <th style="width:130px;text-align:center">状态</th>
-                      <th style="width:170px" class="th-sortable" onclick="sortFiles('time')">上传时间 <span id="sortIcon-time" class="sort-arrow"></span></th>
+                      <th style="width:120px" class="th-sortable" onclick="sortFiles('time')">上传日期 <span id="sortIcon-time" class="sort-arrow"></span></th>
                       <th style="width:120px;text-align:center">操作</th>
                     </tr></thead>
                     <tbody id="kbFileListBody"></tbody>
@@ -2226,13 +2240,16 @@
       // 缓存最新任务快照到 localStorage，刷新后可即时恢复显示（以后端为准）
       Store.set('uploadTasks', tasks);
 
-      // pending 区展示未完结任务（completed 已被后端立即删除，不会出现）
+      // pending 区展示未完结任务（completed 保留 30s 后由后端清理，此期间仍展示）
       const pendingTasks = tasks.filter(t => t.status !== 'completed');
       renderUploadTasks(pendingTasks);
 
-      // 有解析完成的任务时刷新文件列表（completed 已删，靠 parsed 触发刷新即可）
-      const hadParsed = tasks.some(t => t.status === 'parsed');
-      if (hadParsed) await loadFileList();
+      // 文件列表刷新时机：
+      // 1. parsed（解析完成，文件已落到知识列表）—— 窗口短可能 miss
+      // 2. completed（注入完成，切片已入库）—— 后端保留 30s，可靠捕获
+      // 3. 无活跃任务时最后刷新一次
+      const needRefresh = tasks.some(t => ['parsed', 'completed'].includes(t.status));
+      if (needRefresh) await loadFileList();
 
       // 无活跃任务时停止轮询
       if (!hasActive) {
@@ -2364,8 +2381,7 @@
   async function restoreUploadTasks() {
     // 1. 先从缓存即时恢复进行中/排队/失败的任务（completed 不恢复，避免历史累积）
     const cached = Store.get('uploadTasks', []);
-    const restore = cached.filter(t => !['completed'].includes(t.status));
-    if (restore.length) renderUploadTasks(restore);
+    const restore = cached.filter(t => !['completed'].includes(t.status));    if (restore.length) renderUploadTasks(restore);
     // 2. 立即拉后端更新真相，若有活跃任务则持续轮询
     const hadActive = await pollUploadStatus();
     if (hadActive) startPolling();
@@ -2392,20 +2408,18 @@
   function fileTypeSvg(ext) {
     const cls = FILE_ICON_CLASS[ext] || 'file-icon-default';
     let inner = '';
-    if (['pdf'].includes(ext)) {
-      inner = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>';
-    } else if (['doc','docx'].includes(ext)) {
-      inner = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 13h6M8 16h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>';
+    if (['pdf','doc','docx'].includes(ext)) {
+      inner = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>';
     } else if (['xls','xlsx','csv'].includes(ext)) {
-      inner = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 13l2 2 3-3M8 17h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>';
+      inner = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M8 13h2"/><path d="M14 13h2"/><path d="M8 17h2"/><path d="M14 17h2"/>';
     } else if (['ppt','pptx'].includes(ext)) {
-      inner = '<rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M12 17v4M8 21h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M7 8h6M7 11h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>';
+      inner = '<path d="M2 3h20"/><path d="M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3"/><path d="m7 21 5-5 5 5"/>';
     } else if (['md','txt'].includes(ext)) {
-      inner = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 13l2 2 2-2 2 2 2-2 2 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>';
+      inner = '<path d="M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="m5 16-3 3 3 3"/><path d="m9 22 3-3-3-3"/>';
     } else {
-      inner = '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><polyline points="14 2 14 8 20 8" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>';
+      inner = '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/>';
     }
-    return `<div class="file-type-icon-box ${cls}"><svg viewBox="0 0 24 24" fill="none">${inner}</svg></div>`;
+    return `<div class="file-type-icon-box ${cls}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg></div>`;
   }
 
 
@@ -2414,7 +2428,6 @@
     const emptyEl   = document.getElementById('kbFileListEmpty');
     const tableEl   = document.getElementById('kbFileListTable');
     const bodyEl    = document.getElementById('kbFileListBody');
-    const countEl   = document.getElementById('kbFileCount');
 
     // 仅首次加载（列表为空）时显示 loading 动画，后续刷新静默更新避免闪烁
     const isFirstLoad = !bodyEl.children.length && loadingEl.style.display !== 'none';
@@ -2430,7 +2443,9 @@
       if (!data.success) throw new Error(data.error || '加载失败');
 
       loadingEl.style.display = 'none';
-      countEl.textContent = `共 ${data.total} 份文件`;
+
+      const kbUpdatedEl = document.getElementById('kbLastUpdated');
+      if (kbUpdatedEl) kbUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
 
       // 更新 KPI 统计卡片
       updateKpiCards(data.files);
@@ -2486,6 +2501,13 @@
   let _kbFiles = [];            // 后端原始文件列表
   let _fileSort = { key: 'time', dir: 'desc' };   // 排序：key + dir(asc/desc)
   let _selectedFiles = new Set();                  // 选中的 file_name 集合
+  let _kbSearchQuery = '';                          // 文件名搜索关键字
+
+  function filterFileList() {
+    const input = document.getElementById('kbSearchInput');
+    _kbSearchQuery = (input?.value || '').trim().toLowerCase();
+    renderFileRows();
+  }
 
   function _sortKeyVal(f, key) {
     if (key === 'name')   return (f.original_name || '').toLowerCase();
@@ -2498,10 +2520,20 @@
     const bodyEl = document.getElementById('kbFileListBody');
     const tableEl = document.getElementById('kbFileListTable');
     if (!_kbFiles.length) { tableEl.style.display = 'none'; return; }
-    tableEl.style.display = '';
+
+    // 应用搜索过滤
+    const filtered = _kbSearchQuery
+      ? _kbFiles.filter(f => (f.original_name || '').toLowerCase().includes(_kbSearchQuery))
+      : _kbFiles;
+
+    if (!filtered.length) {
+      tableEl.style.display = '';
+      bodyEl.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:48px;color:var(--c-text-3)">未找到匹配的文件</td></tr>';
+      return;
+    }
 
     // 应用排序
-    const sorted = [..._kbFiles].sort((a, b) => {
+    const sorted = [...filtered].sort((a, b) => {
       const va = _sortKeyVal(a, _fileSort.key);
       const vb = _sortKeyVal(b, _fileSort.key);
       let cmp;
@@ -2518,7 +2550,7 @@
 
     bodyEl.innerHTML = sorted.map((f, i) => {
         const ext = f.original_name.match(/\.\w+$/)?.[0]?.slice(1)?.toLowerCase() || '';
-        const uploadTime = f.upload_time ? new Date(f.upload_time).toLocaleString('en-US',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '';
+        const uploadDate = f.upload_time ? new Date(f.upload_time).toISOString().slice(0,10) : '';
         const safeFile = escapeHtml(f.file_name);
         const safeName = escapeHtml(f.original_name);
         const isOrphan = f.status === 'orphan';
@@ -2540,10 +2572,9 @@
                 <span class="file-name-text">${safeName}</span>
               </div>
             </td>
-            <td style="text-align:center;font-family:var(--ff-mono);font-size:var(--fs-sm);tabular-nums;color:var(--c-text-3)">${f.total_chunks.toLocaleString('en-US')}</td>
-            <td style="text-align:center;font-family:var(--ff-mono);font-size:var(--fs-sm);tabular-nums;color:var(--c-text-3)">${f.parent_chunks.toLocaleString('en-US')}</td>
+            <td style="text-align:center">${f.total_chunks.toLocaleString('en-US')}</td>
             <td style="text-align:center">${statusTag}</td>
-            <td style="font-family:var(--ff-mono);font-size:11px;color:var(--c-text-3)">${uploadTime}</td>
+            <td>${uploadDate}</td>
             <td style="text-align:center">
               <div class="row-actions" style="gap:4px" onclick="event.stopPropagation()">
                 ${isOrphan ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
@@ -2697,7 +2728,7 @@
         if (!data.success) throw new Error(data.error || '加载失败');
         ta.value = data.parsed_text || '';
         ta.disabled = false;
-        document.getElementById('parsedSaveStatus').textContent = data.has_text ? '已加载' : '（暂无保存的文本，编辑并保存后可重新切片。）';
+        document.getElementById('parsedSaveStatus').textContent = data.has_text ? '已加载' : '暂无文本';
         renderParsedPreview();
         // 加载完成后显示编辑切换按钮
         document.getElementById('parsedEditToggleBtn').style.display = 'inline-flex';
