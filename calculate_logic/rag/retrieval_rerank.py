@@ -77,6 +77,7 @@ ACCESSCODE = os.getenv("ACCESSCODE", "")         # API 鉴权密钥
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "")  # Embedding 模型名称
 RERANK_MODEL = os.getenv("RERANK_MODEL", "")     # Rerank 模型名称
+RERANK_BASE_URL = os.getenv("RERANK_BASE_URL", "")  # Rerank DashScope 原生服务地址
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))    # Embedding 向量维度（qwen3-embedding-8b 原生 4096）
 MAX_TEXT_LENGTH = 1024                           # Embedding 输入文本最大字符数
 EMBEDDING_TIMEOUT = 30.0                         # Embedding 请求超时（秒）
@@ -207,9 +208,14 @@ class CustomEmbeddingClient:
 
 # ================= Rerank Client =================
 class CustomRerankClient:
-    """调用外部 rerank 服务（OpenAI SDK 风格，走 /rerank 端点）"""
+    """调用阿里云 DashScope 原生 rerank 服务（/api/v1/services/rerank/text-rerank/text-rerank）。
+
+    使用 httpx 异步连接池，支持高并发 rerank 请求。
+    """
+    RERANK_PATH = "/api/v1/services/rerank/text-rerank/text-rerank"
+
     def __init__(self, config: Dict[str, Any]) -> None:
-        self.url = config.get("url", "")
+        self.base_url = config.get("url", "").rstrip("/")
         self.model = config.get("model", "")
         self.accesscode = config.get("accesscode", "")
         self.timeout = float(config.get("timeout", 30))
@@ -217,55 +223,65 @@ class CustomRerankClient:
         if isinstance(self.verify_ssl, str):
             self.verify_ssl = self.verify_ssl.lower() == "true"
 
-        # OpenAI 风格异步客户端：复用其鉴权(Bearer)与连接管理，请求相对路径 /rerank
-        self.async_client = AsyncOpenAI(
-            api_key=self.accesscode,
-            base_url=self.url,
-            http_client=httpx.AsyncClient(
+        self._client: Optional[httpx.AsyncClient] = None
+
+        if self.base_url:
+            logger.info(f"Rerank初始化: base_url={self.base_url}, model={self.model}")
+
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers={
+                    "Authorization": f"Bearer {self.accesscode}",
+                    "Content-Type": "application/json",
+                },
                 verify=self.verify_ssl,
                 timeout=httpx.Timeout(self.timeout, connect=10.0),
                 limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
-            ),
-        )
-
-        if self.url:
-            logger.info(f"Rerank初始化: url={self.url}, model={self.model}")
+            )
+        return self._client
 
     def _build_payload(self, query: str, texts: List[str]) -> Dict[str, Any]:
-        # OpenAI rerank 规约：documents 字段，非 texts
-        payload = {"query": query, "documents": texts, "top_n": len(texts)}
-        if self.model:
-            payload["model"] = self.model
-        return payload
+        return {
+            "model": self.model,
+            "input": {
+                "query": query,
+                "documents": texts,
+            },
+            "parameters": {
+                "top_n": len(texts),
+                "return_documents": False,
+            },
+        }
 
     @staticmethod
     def _parse_scores(body: Any) -> Dict[int, float]:
-        items = []
-        if isinstance(body, list):
-            items = body
-        elif isinstance(body, dict):
-            items = body.get("data") or body.get("results") or body.get("output") or []
-
         scores = {}
+        if isinstance(body, dict):
+            output = body.get("output") or {}
+            items = output.get("results") or []
+        elif isinstance(body, list):
+            items = body
+        else:
+            items = []
+
         for item in items:
             if not isinstance(item, dict):
                 continue
             idx = item.get("index")
-            score = item.get("score", item.get("relevance_score"))
+            score = item.get("relevance_score", item.get("score"))
             if idx is not None and score is not None:
                 scores[int(idx)] = float(score)
         return scores
 
     async def arerank(self, query: str, texts: List[str]) -> Dict[int, float]:
-        """异步 rerank"""
-        if not self.url or not texts:
+        """异步 rerank，返回 {index: score} 映射。"""
+        if not self.base_url or not texts:
             return {}
         try:
-            response = await self.async_client.post(
-                "/rerank",
-                cast_to=httpx.Response,
-                body=self._build_payload(query, texts),
-            )
+            client = self._get_client()
+            response = await client.post(self.RERANK_PATH, json=self._build_payload(query, texts))
             response.raise_for_status()
             return self._parse_scores(response.json())
         except Exception as e:
@@ -273,7 +289,9 @@ class CustomRerankClient:
             return {}
 
     async def close(self) -> None:
-        await self.async_client.close()
+        if self._client is not None and not self._client.is_closed:
+            await self._client.close()
+            self._client = None
 
 
 # ================= 关键词预处理（共享 tokenizer，与入库端一致） =================
@@ -339,12 +357,12 @@ class PgHybridRetriever:
                 "verify_ssl": VERIFY_SSL,
             }),
             rerank_client=CustomRerankClient({
-                "url": BASE_URL,
+                "url": RERANK_BASE_URL,
                 "model": RERANK_MODEL,
                 "accesscode": ACCESSCODE,
                 "timeout": RERANK_TIMEOUT,
                 "verify_ssl": VERIFY_SSL,
-            }) if BASE_URL else None,
+            }) if RERANK_BASE_URL else None,
             table_name=table_name,
             ts_config=ts_config,
         )
@@ -440,7 +458,7 @@ class PgHybridRetriever:
         LIMIT %(coarse_top_k)s
         """
 
-        with conn.cursor() as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             return list(cur.fetchall())
 
@@ -742,9 +760,9 @@ class PgHybridRetriever:
         """
         params: Dict[str, Any] = {
             "group_id": group_id,
-            "prev_id": internal_id - 1,
-            "curr_id": internal_id,
-            "next_id": internal_id + 1,
+            "prev_id": str(internal_id - 1),
+            "curr_id": str(internal_id),
+            "next_id": str(internal_id + 1),
             "uid": uid,
         }
         try:
