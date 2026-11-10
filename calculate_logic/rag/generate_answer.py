@@ -25,6 +25,7 @@ from psycopg_pool import ConnectionPool
 from typing import TypedDict, Annotated, Literal, Sequence, Optional
 import operator
 from dotenv import load_dotenv, find_dotenv
+from typesafe_sdk import TypeSafeClient, Noul, Choice
 
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
@@ -97,6 +98,15 @@ def get_fast_llm_client():
             top_p=0.1,
         )
     return _fast_llm_client
+
+# ================= Jev (TypeSafe) 客户端 —— 用于判断类节点 =================
+_jev_client = None
+def get_jev_client():
+    global _jev_client
+    if _jev_client is None:
+        _jev_client = TypeSafeClient()
+        logger.info("[Jev] TypeSafeClient 初始化完成")
+    return _jev_client
 
 # ================= Langgraph状态State =================
 class ChatState(TypedDict):
@@ -213,7 +223,7 @@ def _clean_history_messages(history_messages: list[BaseMessage]) -> list[str]:
     return dialogue_history
 
 
-# ================= 判断用户问题是追问/全新问题 =================
+# ================= 判断用户问题是追问/全新问题（Jev Noul，LLM 兜底） =================
 async def if_follow(state: ChatState) -> ChatState:
     last_message = state["messages"][-1].content if state["messages"] else ""
     history_messages = _clean_history_messages(state["messages"])[-(followup_n * 2 + 1):-1]
@@ -222,6 +232,29 @@ async def if_follow(state: ChatState) -> ChatState:
         logger.info("[ClassifyTurn] 无历史消息 -> 判定为全新问题")
         return {"is_followup": False}
 
+    # 优先用 Jev Noul 判断
+    try:
+        client = get_jev_client()
+        result = await asyncio.to_thread(
+            client.system_one,
+            state={
+                "history": history_text,
+                "current_message": last_message,
+            },
+            questions={
+                "is_followup": Noul(
+                    instructions="`current_message` 只有结合 `history` 才能理解完整含义？它使用了代词（它、这个、那、怎么做）、省略句（那怎么办？还有呢？），或承接前文的补充提问。寒暄/客套/告别（如OK、谢谢、再见）不算追问。",
+                ),
+            },
+        )
+        noul_val = result.nouls["is_followup"].noul
+        is_followup = noul_val > 0.7
+        logger.info(f"[ClassifyTurn] Jev noul={noul_val:.4f} -> {'followup' if is_followup else 'new'}")
+        return {"is_followup": is_followup}
+    except Exception as e:
+        logger.warning(f"[ClassifyTurn] Jev 不可用，降级为 LLM 判断: {e}")
+
+    # LLM 兜底
     classification_prompt = f"""你是一个多轮对话意图分类器。请阅读下方的【历史对话】和用户的【当前问题】。
     请判断当前问题属于以下哪种类型：
 
@@ -257,12 +290,10 @@ async def if_follow(state: ChatState) -> ChatState:
         )
         decision = response.content.strip().lower()
     except Exception as e:
-        logger.error(f"[ClassifyTurn] LLM 追问分类失败，退化为全新问题: {e}")
+        logger.error(f"[ClassifyTurn] LLM 兜底也失败，退化为全新问题: {e}")
         decision = "new"
     is_followup = "followup" in decision
-
-    context_mode = "followup" if is_followup else "new"
-    logger.info(f"[ClassifyTurn] 该轮对话属于[{context_mode}]")
+    logger.info(f"[ClassifyTurn] LLM 兜底 -> {'followup' if is_followup else 'new'}")
     return {"is_followup": is_followup}
 
 # ================= 查询重写/指代消解 =================
@@ -335,13 +366,37 @@ async def query_rewrite(state: ChatState) -> ChatState:
     logger.info(f"[QueryRewrite] 改写结果: {rewritten_query}")    
     return {"query": rewritten_query}
 
-# ================= 敏感话题LLM检测（与主线并行） =================
+# ================= 敏感话题检测（Jev Noul，LLM 兜底，与主线并行） =================
 # 命中敏感话题时不走 RAG 链路，而是走独立固定话术分支（mode=sensitive）。
 SENSITIVE_REPLY = os.getenv("SENSITIVE_REPLY", "抱歉，我无法回答这个问题。").strip()
 SENSITIVE_TOPICS = os.getenv("SENSITIVE_TOPICS", "").strip()
 async def _judge_sensitive(query: str) -> str:
     if not query or not query.strip():
         return "miss"
+
+    # 优先用 Jev Noul 判断
+    try:
+        client = get_jev_client()
+        result = await asyncio.to_thread(
+            client.system_one,
+            state={
+                "user_query": query,
+                "sensitive_topics": SENSITIVE_TOPICS,
+            },
+            questions={
+                "is_sensitive": Noul(
+                    instructions="`user_query` 涉及 `sensitive_topics` 中的话题，或政治敏感、赌博、毒品药物、色情、暴力恐怖、诈骗、违法活动、侵犯他人隐私、黑客攻击等违规内容？除非严格命中，否则视为安全。",
+                ),
+            },
+        )
+        noul_val = result.nouls["is_sensitive"].noul
+        hit = noul_val > 0.7
+        logger.info(f"[Sensitive] Jev noul={noul_val:.4f} query='{query[:50]}' -> {'hit' if hit else 'miss'}")
+        return "hit" if hit else "miss"
+    except Exception as e:
+        logger.warning(f"[Sensitive] Jev 不可用，降级为 LLM 判断: {e}")
+
+    # LLM 兜底
     judge_prompt = f"""你是一个内容安全审查器。请判断用户的最新提问是否涉及敏感或违规话题。
     注意：中英文表述都需识别，除非严格命中话题范围，否则视为安全。
 
@@ -369,13 +424,13 @@ async def _judge_sensitive(query: str) -> str:
             timeout=10,
         )
         text = (response.content or "").strip().lower()
-        logger.info(f"[Sensitive] LLM判定 query='{query[:50]}' -> {text}")
+        logger.info(f"[Sensitive] LLM兜底 query='{query[:50]}' -> {text}")
         return "hit" if '"hit"' in text or "'hit'" in text else "miss"
     except asyncio.TimeoutError:
         logger.warning(f"[Sensitive] LLM 超时，按 miss 放行: query='{query[:50]}'")
         return "miss"
     except Exception as e:
-        logger.error(f"[Sensitive] LLM 判定失败，按 miss 放行: {e}")
+        logger.error(f"[Sensitive] LLM 兜底也失败，按 miss 放行: {e}")
         return "miss"
 
 # ================= 检测场景命中，调用场景模板（查表注入，实时生效） =================
@@ -411,11 +466,44 @@ def _load_scenes() -> list[dict]:
 
 async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
     """判断 query 命中哪个场景，返回场景 id；未命中返回空字符串。
-    scenes 参数由调用方一次性加载后传入，避免重复查库。"""
+    scenes 参数由调用方一次性加载后传入，避免重复查库。
+    优先用 Jev Choice 判断，不可用时降级为 LLM。"""
     if scenes is None:
         scenes = _load_scenes()
     if not query or not query.strip() or not scenes:
         return ""
+
+    valid_scene_ids = {s["id"] for s in scenes}
+
+    # 优先用 Jev Choice 判断
+    try:
+        client = get_jev_client()
+        criteria = {s["id"]: f"{s['name']}：{s['trigger']}" for s in scenes}
+        result = await asyncio.to_thread(
+            client.system_one,
+            state={"user_query": query},
+            questions={
+                "scene_hit": Choice(
+                    instructions="`user_query` 命中以下哪个预设场景？",
+                    criteria=criteria,
+                ),
+                "has_match": Noul(
+                    instructions="`user_query` 明确命中某个预设场景的触发条件？如果只是泛泛提问或闲聊，未命中任何场景。",
+                ),
+            },
+        )
+        has_match = result.nouls["has_match"].noul > 0.7
+        if has_match:
+            hit_id = result.choices["scene_hit"].choice
+            if hit_id in valid_scene_ids:
+                logger.info(f"[SceneJudge] Jev 命中场景: {hit_id} query='{query[:50]}'")
+                return hit_id
+        logger.info(f"[SceneJudge] Jev 未命中 has_match={result.nouls['has_match'].noul:.4f} query='{query[:50]}'")
+        return ""
+    except Exception as e:
+        logger.warning(f"[SceneJudge] Jev 不可用，降级为 LLM 判断: {e}")
+
+    # LLM 兜底
     scenes_desc = "\n".join(
         f"- id={s['id']} 场景名={s['name']} 触发场景={s['trigger']}" for s in scenes
     )
@@ -441,18 +529,18 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
             timeout=10,
         )
         text = (response.content or "").strip().lower()
-        logger.info(f"[SceneJudge] query='{query[:50]}' -> {text}")
+        logger.info(f"[SceneJudge] LLM兜底 query='{query[:50]}' -> {text}")
         import re as _re
         m = _re.search(r'"scene"\s*:\s*"?([a-z0-9_-]+)"?', text)
         hit = m.group(1) if m else ""
-        if hit in {s["id"] for s in scenes}:
+        if hit in valid_scene_ids:
             return hit
         return ""
     except asyncio.TimeoutError:
         logger.warning(f"[SceneJudge] LLM 超时，按未命中放行: query='{query[:50]}'")
         return ""
     except Exception as e:
-        logger.error(f"[SceneJudge] 判定失败，按未命中放行: {e}")
+        logger.error(f"[SceneJudge] LLM 兜底也失败，按未命中放行: {e}")
         return ""
 
 
