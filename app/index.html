@@ -1322,7 +1322,7 @@
                   </div>
                   <div>
                     <div class="kb-kpi-value-row"><span class="kb-kpi-value" id="kbKpiChunkCount">0</span><span class="kb-kpi-unit">条</span></div>
-                    <p class="kb-kpi-label">索引片段</p>
+                    <p class="kb-kpi-label">切块数目</p>
                   </div>
                 </div>
                 <div class="kb-kpi-card">
@@ -1359,7 +1359,7 @@
                   <div class="kb-empty-state">
                     <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                     <div class="kb-empty-state-title">暂无文件</div>
-                    <div class="kb-empty-state-desc">上传文件后将自动进行切片与索引。</div>
+                    <div class="kb-empty-state-desc">上传文件后将自动进行解析与入库</div>
                   </div>
                 </div>
               </div>
@@ -1608,7 +1608,7 @@
               <div class="chat-empty" id="chatEmpty">
                 <img src="/front_end_assets/Avatar.svg" class="chat-empty__icon" alt="象象仔" style="width:56px;height:56px;border-radius:14px;object-fit:contain" />
                 <div class="chat-empty__title">象象仔</div>
-                <div class="chat-empty__desc">知识库已就绪，请向我提问任何相关问题。</div>
+                <div class="chat-empty__desc">把你的文件上传到知识库，就可以向我提问任何相关问题啦</div>
               </div>
             </div>
             <div class="chat-input-area">
@@ -2018,13 +2018,10 @@
     pendingFile = null;
     renameModal.style.display = 'none';
 
-    const shouldOverwrite = _overwriteNext;
-    _overwriteNext = false;
-
-    await doUpload(file, shouldOverwrite);
+    await doUpload(file);
   });
 
-  async function doUpload(file, overwrite) {
+  async function doUpload(file) {
     const uploadBtn = document.getElementById('uploadFab');
     if (uploadBtn) uploadBtn.classList.add('uploading');
     const formData = new FormData();
@@ -2038,29 +2035,11 @@
       formData.append('expire_time', expireVal);
     }
     formData.append('if_show', ifShowInput.checked);
-    if (overwrite) {
-      formData.append('overwrite', 'true');
-    }
 
     try {
       const res = await apiFetch('/chunk/upload', { method: 'POST', body: formData });
       const data = await res.json();
       if (!res.ok) {
-        // 重名检测：后端返回 409 + duplicate=true，提示用户是否覆盖
-        if (data.duplicate) {
-          const confirmed = await showConfirm('文件重名', data.error, '同名文件将被覆盖，是否继续？', '覆盖上传');
-          if (confirmed) {
-            // 重新弹出改名弹窗让用户确认，然后带 overwrite=true 重新上传
-            pendingFile = file;
-            renameInput.value = file.name.replace(/\.[^.]+$/, '');
-            expireInput.value = '';
-            ifShowInput.checked = true;
-            renameModal.style.display = 'flex';
-            // 标记下次确认时带 overwrite
-            _overwriteNext = true;
-          }
-          return;
-        }
         await showAlert('上传失败', data.error || res.statusText);
         return;
       }
@@ -2073,7 +2052,6 @@
       if (uploadBtn) uploadBtn.classList.remove('uploading');
     }
   }
-  let _overwriteNext = false;
   document.getElementById('renameCancel').addEventListener('click', () => {
     pendingFile = null;
     renameModal.style.display = 'none';
@@ -2166,8 +2144,8 @@
   async function confirmDelete(fileName, originalName, status) {
     const isOrphan = status === 'orphan';
     const msg = isOrphan
-      ? `删除孤立文件"${originalName}"？`
-      : `删除"${originalName}"？`;
+      ? `删除 "${originalName}"？`
+      : `删除 "${originalName}"？`;
     const sub = isOrphan
       ? '未索引/上传失败'
       : '将删除知识库切片和解析结果。';
@@ -2384,7 +2362,7 @@
                       : (t.status==='cancelled' ? ICON_SVG.ban : ICON_SVG.cross));
       // 操作按钮：仅解析阶段可中止；注入阶段无停止按钮；失败/已中止 → 删除任务记录
       const actionBtn = isParsingPhase
-        ? `<button class="pending-item-btn" title="中止任务" onclick="cancelTask('${t.task_id}','${escapeHtml(t.original_name)}')">${ICON_SVG.stop}</button>`
+        ? `<button class="pending-item-btn" title="停止任务" onclick="cancelTask('${t.task_id}','${escapeHtml(t.original_name)}')">${ICON_SVG.stop}</button>`
         : isInjectionPhase
           ? ''  // 注入阶段无停止按钮
           : isRemovable
@@ -2413,18 +2391,18 @@
 
   // 中止上传任务：仅解析阶段可中止；注入阶段不可中止
   async function cancelTask(taskId, originalName) {
-    if (!await showConfirm('中止任务', `中止"${originalName}"？`, '将立即删除已上传的文件和解析产物。', '中止')) return;
+    if (!await showConfirm('停止任务', `停止"${originalName}"？`, '将立即删除已上传的文件和解析产物。', '停止')) return;
     try {
       const res = await apiFetch(`/kb/task/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' });
       const data = await res.json();
-      if (!data.success) { await showAlert('中止失败', data.error || res.statusText); return; }
+      if (!data.success) { await showAlert('未能停止', data.error || res.statusText); return; }
       await pollUploadStatus();
-    } catch (err) { await showAlert('中止失败', err.message); }
+    } catch (err) { await showAlert('未能停止', err.message); }
   }
 
   // 删除上传任务记录（失败/已中止的），让 Upload Status 区干净
   async function deleteTask(taskId, originalName) {
-    if (!await showConfirm('移除任务', `移除任务"${originalName}"？`, '这将移除任务记录及磁盘上的孤立文件。', '移除')) return;
+    if (!await showConfirm('停止任务', `停止任务"${originalName}"？`, '这将移除该文件。', '移除')) return;
     try {
       const res = await apiFetch(`/kb/task/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
       const data = await res.json();
@@ -2523,6 +2501,7 @@
         return;
       }
 
+      emptyEl.style.display = 'none';
       _kbFiles = data.files;                 // 缓存原始数据供排序/多选用
       _selectedFiles = new Set();            // 重置选中（重新加载后清空）
       renderFileRows();
@@ -3415,7 +3394,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   function initPlaceholderTypewriter() {
     const textarea = document.getElementById('chatInput');
     if (!textarea) return;
-    const phrases = ['和我聊聊吧...', '继续追问，或者来一个新问题...', '我会以你提供的知识为准，不胡说八道...', '和你聊的每一句都会构成我眼中的你...'];
+    const phrases = ['你好呀，和象象仔聊聊天吧....', '记得构建好我们对话的基础（知识库）哦....', '我会以你提供的知识为准，不会凭空捏造....', '和象象仔的每一次对话，都会构成我眼中的你....'];
     let phraseIndex = 0, charIndex = 0, isDeleting = false, isPaused = false;
     
     function type() {

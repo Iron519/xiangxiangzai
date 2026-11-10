@@ -4,7 +4,9 @@ import bcrypt
 import psycopg
 from dotenv import load_dotenv, find_dotenv
 
-load_dotenv(find_dotenv())
+# 确保能从项目根目录加载 .env
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(find_dotenv(usecwd=True) or os.path.join(_PROJECT_ROOT, ".env"))
 
 USER_TABLE = os.getenv("PG_MYAGENT_USER_TABLE", "myagent_user")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -15,6 +17,7 @@ TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
 FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq")
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
+# 旧表（已废弃的 _mgmt 后缀表）
 OLD_TABLES = [
     "myagent_user_mgmt",
     "myagent_kb_chunks_mgmt",
@@ -22,6 +25,8 @@ OLD_TABLES = [
     "myagent_upload_tasks_mgmt",
     "myagent_faq_mgmt",
 ]
+# 当前所有表，重建时先 DROP
+ALL_TABLES = [USER_TABLE, KB_TABLE, CONV_TABLE, SESSION_TABLE, TASK_TABLE, FAQ_TABLE, SCENE_TABLE]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 
 
@@ -39,10 +44,14 @@ DDL_STATEMENTS = [
     # ─── 删除旧的 _mgmt 后缀表 ───
     *[f"DROP TABLE IF EXISTS {t} CASCADE" for t in OLD_TABLES],
 
+    # ─── 删除当前所有表（重建）───
+    *[f"DROP TABLE IF EXISTS {t} CASCADE" for t in ALL_TABLES],
+
     # ─── 用户表：uid 为5位数字编号，自增序列 ───
-    "CREATE SEQUENCE IF NOT EXISTS user_uid_seq START 1",
+    "DROP SEQUENCE IF EXISTS user_uid_seq",
+    "CREATE SEQUENCE user_uid_seq START 1",
     f"""
-    CREATE TABLE IF NOT EXISTS {USER_TABLE} (
+    CREATE TABLE {USER_TABLE} (
         id              bigserial PRIMARY KEY,
         uid             varchar(5)  NOT NULL UNIQUE DEFAULT lpad(nextval('user_uid_seq')::text, 5, '0'),
         username        varchar(30) NOT NULL,
@@ -55,12 +64,12 @@ DDL_STATEMENTS = [
         update_time     timestamp    NOT NULL DEFAULT now()
     )
     """,
-    f"CREATE INDEX IF NOT EXISTS idx_{USER_TABLE}_uid ON {USER_TABLE} (uid) WHERE deleted = false",
-    f"CREATE INDEX IF NOT EXISTS idx_{USER_TABLE}_approved ON {USER_TABLE} (approved) WHERE deleted = false",
+    f"CREATE INDEX idx_{USER_TABLE}_uid ON {USER_TABLE} (uid) WHERE deleted = false",
+    f"CREATE INDEX idx_{USER_TABLE}_approved ON {USER_TABLE} (approved) WHERE deleted = false",
 
     # ─── 知识库切片表：uid + original_name 贯穿 ───
     f"""
-    CREATE TABLE IF NOT EXISTS {KB_TABLE} (
+    CREATE TABLE {KB_TABLE} (
         chunk_index           BIGINT PRIMARY KEY,
         uid                   VARCHAR(5) NOT NULL DEFAULT '',
         original_name         TEXT NOT NULL DEFAULT '',
@@ -85,15 +94,12 @@ DDL_STATEMENTS = [
         UNIQUE (uid, file_name, text_hash)
     )
     """,
-    # ─── 增量迁移：为已存在的表补充 file_size 列 ───
-    f"ALTER TABLE {KB_TABLE} ADD COLUMN IF NOT EXISTS file_size BIGINT DEFAULT 0",
-    f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_content_tsv ON {KB_TABLE} USING gin (content_tsv)",
-    f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_uid ON {KB_TABLE} (uid)",
-    f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_file_hash ON {KB_TABLE} (uid, file_name, text_hash)",
-    f"CREATE INDEX IF NOT EXISTS idx_{KB_TABLE}_expire_time ON {KB_TABLE} (expire_time)",
+    f"CREATE INDEX idx_{KB_TABLE}_content_tsv ON {KB_TABLE} USING gin (content_tsv)",
+    f"CREATE INDEX idx_{KB_TABLE}_uid ON {KB_TABLE} (uid)",
+    f"CREATE INDEX idx_{KB_TABLE}_file_hash ON {KB_TABLE} (uid, file_name, text_hash)",
+    f"CREATE INDEX idx_{KB_TABLE}_expire_time ON {KB_TABLE} (expire_time)",
 
     # ─── 会话管理表：一个用户最多10个session ───
-    f"DROP TABLE IF EXISTS {SESSION_TABLE}",
     f"""
     CREATE TABLE {SESSION_TABLE} (
         id              BIGSERIAL PRIMARY KEY,
@@ -109,8 +115,7 @@ DDL_STATEMENTS = [
     """,
     f"CREATE INDEX idx_{SESSION_TABLE}_uid_time ON {SESSION_TABLE} (uid, last_message_at DESC) WHERE deleted = false",
 
-    # ─── 对话历史表：删除旧表重建 ───
-    f"DROP TABLE IF EXISTS {CONV_TABLE}",
+    # ─── 对话历史表 ───
     f"""
     CREATE TABLE {CONV_TABLE} (
         id            BIGSERIAL PRIMARY KEY,
@@ -133,12 +138,12 @@ DDL_STATEMENTS = [
         created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
-    f"CREATE INDEX IF NOT EXISTS idx_{CONV_TABLE}_uid_session ON {CONV_TABLE} (uid, session_id, turn_count)",
-    f"CREATE INDEX IF NOT EXISTS idx_{CONV_TABLE}_untagged ON {CONV_TABLE} (tags) WHERE role = 'user' AND tags IS NULL",
+    f"CREATE INDEX idx_{CONV_TABLE}_uid_session ON {CONV_TABLE} (uid, session_id, turn_count)",
+    f"CREATE INDEX idx_{CONV_TABLE}_untagged ON {CONV_TABLE} (tags) WHERE role = 'user' AND tags IS NULL",
 
     # ─── 上传任务表 ───
     f"""
-    CREATE TABLE IF NOT EXISTS {TASK_TABLE} (
+    CREATE TABLE {TASK_TABLE} (
         task_id         TEXT PRIMARY KEY,
         uid             VARCHAR(5) NOT NULL DEFAULT '',
         original_name   TEXT NOT NULL,
@@ -158,11 +163,11 @@ DDL_STATEMENTS = [
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
-    f"CREATE INDEX IF NOT EXISTS idx_{TASK_TABLE}_uid_status ON {TASK_TABLE} (uid, status)",
+    f"CREATE INDEX idx_{TASK_TABLE}_uid_status ON {TASK_TABLE} (uid, status)",
 
     # ─── FAQ 表（全局共享）───
     f"""
-    CREATE TABLE IF NOT EXISTS {FAQ_TABLE} (
+    CREATE TABLE {FAQ_TABLE} (
         id            BIGSERIAL PRIMARY KEY,
         question      TEXT NOT NULL,
         answer        TEXT NOT NULL,
@@ -170,11 +175,11 @@ DDL_STATEMENTS = [
         updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
-    f"CREATE INDEX IF NOT EXISTS idx_{FAQ_TABLE}_question ON {FAQ_TABLE} (question)",
+    f"CREATE INDEX idx_{FAQ_TABLE}_question ON {FAQ_TABLE} (question)",
 
     # ─── 场景模板表（全局共享）───
     f"""
-    CREATE TABLE IF NOT EXISTS {SCENE_TABLE} (
+    CREATE TABLE {SCENE_TABLE} (
         id               BIGSERIAL PRIMARY KEY,
         scene_id         TEXT NOT NULL UNIQUE,
         name             TEXT NOT NULL,
@@ -199,7 +204,7 @@ def main():
     conn.autocommit = True
     cur = conn.cursor()
 
-    print("[DDL] 建表 + 索引...")
+    print("[DDL] 删除旧表 + 重建所有表...")
     for stmt in DDL_STATEMENTS:
         first_line = stmt.strip().splitlines()[0].strip()
         try:
@@ -232,7 +237,7 @@ def main():
 
     cur.close()
     conn.close()
-    print("\n[Done] 全部表初始化完成")
+    print("\n[Done] 全部表重建完成")
 
 
 if __name__ == "__main__":

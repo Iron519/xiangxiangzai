@@ -544,16 +544,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     save_name = display_name_final  # 物理文件名 = 展示名（允许空格、波浪线等任意字符）
     save_path = str(uid_upload_dir / save_name)
 
-    # 重名检测：若文件已存在且用户未确认覆盖，返回 409 提示
-    if os.path.exists(save_path) and not overwrite:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "error": f"文件 '{save_name}' 已存在，是否覆盖？",
-                "duplicate": True,
-                "file_name": save_name,
-            },
-        )
+    # 同名文件直接覆盖，不提示
 
     # 解析并校验过期时间：空=永久有效；非法格式返回 400
     expire_iso: Optional[str] = None
@@ -614,10 +605,7 @@ KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "")
 async def kb_files(current_user: TokenData = Depends(get_current_user)):
     """返回知识库中所有文件的聚合信息列表。
 
-    包含两类文件：
-    - ingested：已入库到 {KB_TABLE} 的文件（按 file_name 聚合）；
-    - orphan：上传失败或未入库、但在 data/upload_kb/ 留有物理文件、且无任务记录的孤儿文件。
-      这类文件前端可见、可删除（删除时一并清掉磁盘文件），避免“上传失败后既不可见又删不掉”。
+    只返回已入库到 {KB_TABLE} 的文件（按 file_name 聚合）。
     """
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
@@ -682,45 +670,6 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
             for row in rows
         ]
 
-        # 扫描 upload_kb/{uid}/ 目录，找出孤儿物理文件
-        orphan_files = []
-        try:
-            ingested_names = {f["file_name"] for f in files}
-            now_ts = datetime.now().timestamp()
-            FRESH_GRACE_SECS = 120
-            # 从任务表取 save_name -> original_name 映射
-            task_name_map = {r[0]: r[1] for r in task_rows if r[0] and r[1]} if task_rows else {}
-            # 只扫描当前用户的 upload_kb/{uid}/ 目录
-            scan_dirs = []
-            uid_dir = UPLOAD_DIR / uid
-            if uid_dir.is_dir():
-                scan_dirs.append((uid, uid_dir))
-            for dir_uid, scan_dir in scan_dirs:
-                for name in sorted(os.listdir(scan_dir)):
-                    if name.startswith(".") or name == ".gitkeep":
-                        continue
-                    full = str(scan_dir / name)
-                    if name in ingested_names or name in task_map:
-                        continue
-                    mtime = os.path.getmtime(full)
-                    if now_ts - mtime < FRESH_GRACE_SECS:
-                        continue
-                    orig = task_name_map.get(name, name)
-                    orphan_files.append({
-                        "file_name":      name,
-                        "original_name":  orig,
-                        "file_path":      full,
-                        "file_size":      os.path.getsize(full),
-                        "total_chunks":   0,
-                        "parent_chunks":  0,
-                        "upload_time":    datetime.fromtimestamp(mtime).isoformat(),
-                        "last_update":    "",
-                        "status":         "orphan",
-                    })
-        except Exception as e:
-            logger.warning(f"[KBFiles] 扫描孤儿文件失败: {e}")
-
-        files.extend(orphan_files)
         return JSONResponse(content={"success": True, "files": files, "total": len(files)})
     except Exception as e:
         logger.error(f"[KBFiles] 查询失败: {e}")
