@@ -42,6 +42,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       ENV: dev
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
     ports:
       - "8099:8099"
     volumes:

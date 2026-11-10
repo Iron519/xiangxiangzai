@@ -35,6 +35,9 @@ numpy==2.5.4
 # 日志
 concurrent-log-handler==0.9.31
 
+# TypeSafe AI SDK (System One 模型)
+typesafe-sdk
+
 # 其他
 emoji==2.16.0
 PyMuPDF==2.0

@@ -605,75 +605,16 @@ KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "")
 async def kb_files(current_user: TokenData = Depends(get_current_user)):
     """返回知识库中所有文件的聚合信息列表。
 
-    只返回已入库到 {KB_TABLE} 的文件（按 file_name 聚合）。
+    只返回同时满足以下三个条件的文件：
+    1. 向量库（{KB_TABLE}）中有该文件的切片数据；
+    2. 原文件存档存在（upload_kb/{uid}/ 下有物理文件）；
+    3. 全文解析结果存在（parse_result/{uid}/{file_stem}/merged.md 存在）。
     """
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
-    try:
-        with _kb_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        k.file_name,
-                        COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
-                        k.file_path,
-                        COUNT(*)                                          AS total_chunks,
-                        COUNT(DISTINCT k.group_id)                        AS parent_chunks,
-                        MIN(k.upload_time)                                AS upload_time,
-                        MAX(k.update_time)                                AS last_update,
-                        COALESCE(MAX(k.file_size), 0)                     AS file_size
-                    FROM {KB_TABLE} k
-                    LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
-                    WHERE k.uid = %s
-                    GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
-                    ORDER BY MIN(k.upload_time) DESC
-                """, (uid,))
-                rows = cur.fetchall()
-                # 任务记录里的 save_name，用于区分"正在处理中"与"真孤儿"
-                cur.execute(f"SELECT save_name, status, created_at FROM {UPLOAD_TASKS_TABLE}")
-                task_rows = cur.fetchall()
-
-        task_map = {r[0]: {"status": r[1], "upload_time": r[2]} for r in task_rows}
-
-        def _disk_size(save_name: str, file_uid: str = "") -> int:
-            """从 upload_kb/{uid}/ 读物理文件大小；读不到返回 0。"""
-            try:
-                if file_uid:
-                    p = UPLOAD_DIR / file_uid / save_name
-                else:
-                    p = UPLOAD_DIR / save_name
-                return os.path.getsize(p) if p.is_file() else 0
-            except Exception:
-                return 0
-
-        def _disk_size_by_path(file_path: str) -> int:
-            """直接从 file_path 列读取物理文件大小。"""
-            try:
-                p = Path(file_path)
-                return os.path.getsize(p) if p.is_file() else 0
-            except Exception:
-                return 0
-
-        files = [
-            {
-                "file_name":      row[0],
-                "original_name":  row[1],
-                "file_path":      row[2],
-                "file_size":      row[7] or _disk_size_by_path(row[2]) or _disk_size(row[0], row[2].split("/")[-2] if "/" in row[2] else uid),
-                "total_chunks":   row[3],
-                "parent_chunks":  row[4],
-                "upload_time":    row[5].isoformat() if row[5] else "",
-                "last_update":    row[6].isoformat() if row[6] else "",
-                "status":         "ingested",
-            }
-            for row in rows
-        ]
-
-        return JSONResponse(content={"success": True, "files": files, "total": len(files)})
-    except Exception as e:
-        logger.error(f"[KBFiles] 查询失败: {e}")
-        return JSONResponse(status_code=500, content={"error": str(e)})
+    files = await asyncio.to_thread(_query_kb_files_with_filter, uid)
+    return JSONResponse(content={"success": True, "files": files, "total": len(files)})
 
 
 @router.get("/kb/upload-status")
@@ -741,44 +682,110 @@ async def kb_upload_sse(token: str = "", current_user: TokenData = Depends(get_c
     )
 
 
-def _kb_stats(uid: str) -> dict:
-    """从 PG 查询知识库实时统计：文档总数、索引片段总数、存储空间总大小。
+def _has_parse_result(file_name: str, uid: str) -> bool:
+    """检查全文解析结果 merged.md 是否存在。
+    路径：parse_result/{uid}/{file_stem}/merged.md（兼容旧结构 parse_result/{file_stem}/merged.md）
+    """
+    stem = Path(file_name).stem.replace(" ", "_")
+    for base in [Path(PARSE_RESULT_DIR) / uid / stem, Path(PARSE_RESULT_DIR) / stem]:
+        if (base / "merged.md").is_file():
+            return True
+    return False
 
-    数据来源（全部来自 myagent_kb_chunks 表，按 uid 过滤）：
-    - 文档总数：COUNT(DISTINCT file_name)
-    - 索引片段：COUNT(*)
-    - 存储空间：每个文件的 file_size 在 chunk 行中冗余存储，按 file_name 去重后取 MAX 再求和
-      （用 SUM 会把同一文件的 file_size 重复累加 N 次，导致存储空间虚高）
+
+def _has_original_file(file_path: str, file_name: str, uid: str) -> bool:
+    """检查原文件存档是否存在（file_path 列或 upload_kb/{uid}/ 下）。"""
+    if file_path and Path(file_path).is_file():
+        return True
+    return (UPLOAD_DIR / uid / file_name).is_file()
+
+
+def _query_kb_files_with_filter(uid: str) -> list[dict]:
+    """查询知识库文件列表，只返回同时满足以下三个条件的文件：
+    1. 向量库（{KB_TABLE}）中有该文件的切片数据；
+    2. 原文件存档存在（upload_kb/{uid}/ 下有物理文件）；
+    3. 全文解析结果存在（parse_result/{uid}/{file_stem}/merged.md 存在）。
+
+    返回与 _kb_stats 统一数据源的文件列表。
     """
     if not KB_TABLE:
-        return {"doc_count": 0, "chunk_count": 0, "total_size": 0}
+        return []
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        COUNT(DISTINCT file_name)              AS doc_count,
-                        COUNT(*)                               AS chunk_count,
-                        COALESCE(
-                            (SELECT SUM(max_size) FROM (
-                                SELECT MAX(file_size) AS max_size
-                                FROM {KB_TABLE}
-                                WHERE uid = %s
-                                GROUP BY file_name
-                            ) s), 0
-                        )                                     AS total_size
-                    FROM {KB_TABLE}
-                    WHERE uid = %s
-                """, (uid, uid))
-                row = cur.fetchone()
-        return {
-            "doc_count": row[0] or 0,
-            "chunk_count": row[1] or 0,
-            "total_size": int(row[2] or 0),
-        }
+                        k.file_name,
+                        COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
+                        k.file_path,
+                        COUNT(*)                                          AS total_chunks,
+                        COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                        MIN(k.upload_time)                                AS upload_time,
+                        MAX(k.update_time)                                AS last_update,
+                        COALESCE(MAX(k.file_size), 0)                     AS file_size
+                    FROM {KB_TABLE} k
+                    LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                    WHERE k.uid = %s
+                    GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
+                    ORDER BY MIN(k.upload_time) DESC
+                """, (uid,))
+                rows = cur.fetchall()
+
+        def _disk_size_by_path(file_path: str) -> int:
+            try:
+                p = Path(file_path)
+                return os.path.getsize(p) if p.is_file() else 0
+            except Exception:
+                return 0
+
+        files = []
+        skipped = 0
+        for row in rows:
+            file_name = row[0]
+            file_path = row[2]
+            if not _has_original_file(file_path, file_name, uid):
+                skipped += 1
+                logger.debug(f"[KBFiles] 跳过 {file_name}: 原文件存档不存在")
+                continue
+            if not _has_parse_result(file_name, uid):
+                skipped += 1
+                logger.debug(f"[KBFiles] 跳过 {file_name}: 全文解析结果不存在")
+                continue
+            files.append({
+                "file_name":      file_name,
+                "original_name":  row[1],
+                "file_path":      file_path,
+                "file_size":      row[7] or _disk_size_by_path(file_path),
+                "total_chunks":   row[3],
+                "parent_chunks":  row[4],
+                "upload_time":    row[5].isoformat() if row[5] else "",
+                "last_update":    row[6].isoformat() if row[6] else "",
+                "status":         "ingested",
+            })
+
+        if skipped:
+            logger.info(f"[KBFiles] 过滤掉 {skipped} 个不完整文件（缺少原文件或解析结果）")
+
+        return files
     except Exception as e:
-        logger.warning(f"[KBStats] 查询统计失败: {e}")
-        return {"doc_count": 0, "chunk_count": 0, "total_size": 0}
+        logger.error(f"[KBFiles] 查询失败: {e}")
+        return []
+
+
+def _kb_stats(uid: str) -> dict:
+    """从知识库文件列表聚合统计：文档总数、索引片段总数、存储空间总大小。
+
+    数据来源与 /kb/files 完全一致（_query_kb_files_with_filter），保证 KPI 卡片与文件列表一致。
+    """
+    files = _query_kb_files_with_filter(uid)
+    doc_count = len(files)
+    chunk_count = sum(f.get("total_chunks", 0) for f in files)
+    total_size = sum(f.get("file_size", 0) for f in files)
+    return {
+        "doc_count": doc_count,
+        "chunk_count": chunk_count,
+        "total_size": int(total_size),
+    }
 
 
 @router.get("/kb/stats")

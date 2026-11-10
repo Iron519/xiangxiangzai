@@ -118,13 +118,54 @@
     }
     .app-layout.fluid { min-width: 100%; }
 
-    /* ── Sidebar wrapper (figma_files: transition-all duration-300, w-[292px]↔w-0) ── */
+    /* ── Sidebar wrapper (figma_files: transition-all duration-300) ── */
     .sidebar-wrapper {
       flex-shrink: 0; overflow: hidden;
       transition: all 0.3s ease;
     }
     .sidebar-wrapper.expanded { width: 292px; }
-    .sidebar-wrapper.collapsed { width: 0; }
+    .sidebar-wrapper.collapsed { width: 56px; }
+
+    /* Collapsed state: hide text labels, center icons */
+    .sidebar-wrapper.collapsed .sidebar-logo,
+    .sidebar-wrapper.collapsed .sidebar-new-chat span,
+    .sidebar-wrapper.collapsed .sidebar-nav-item span,
+    .sidebar-wrapper.collapsed .sidebar-divider,
+    .sidebar-wrapper.collapsed .sidebar-chat-section,
+    .sidebar-wrapper.collapsed .sidebar-user-info,
+    .sidebar-wrapper.collapsed .sidebar-user-menu-btn,
+    .sidebar-wrapper.collapsed .sidebar-user-menu,
+    .sidebar-wrapper.collapsed .nav-badge {
+      display: none !important;
+    }
+    .sidebar-wrapper.collapsed .sidebar-header {
+      justify-content: center; padding: 0 16px;
+    }
+    .sidebar-wrapper.collapsed .sidebar-new-chat {
+      width: 40px; margin: 0 auto 12px; padding: 12px; border-radius: 12px;
+    }
+    .sidebar-wrapper.collapsed > .app-left-menu > div[style*="padding"] {
+      padding: 0 8px 12px !important;
+    }
+    .sidebar-wrapper.collapsed .sidebar-nav {
+      padding: 0 8px; gap: 6px;
+    }
+    .sidebar-wrapper.collapsed .sidebar-nav-item {
+      justify-content: center; padding: 10px 0; gap: 0;
+    }
+    .sidebar-wrapper.collapsed .sidebar-nav-item svg {
+      width: 16px; height: 16px;
+    }
+    .sidebar-wrapper.collapsed .sidebar-user {
+      justify-content: center; padding: 8px; margin: 12px auto; gap: 0;
+      width: 40px; flex-shrink: 0; margin-top: auto;
+    }
+    .sidebar-wrapper.collapsed .sidebar-user-avatar {
+      width: 28px; height: 28px; font-size: 12px;
+    }
+    .sidebar-wrapper.collapsed .app-left-menu {
+      width: 56px;
+    }
 
     /* ── Sidebar inner (figma_files: fixed 292px, border-r, bg-sidebar) ── */
     .app-left-menu {
@@ -220,7 +261,10 @@
       transition: all 0.15s ease; border: none; background: transparent; font-family: var(--ff);
     }
     .sidebar-chat-item:hover { background: var(--c-sidebar-hover); }
-    .sidebar-chat-item.active { background: var(--c-surface); box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .sidebar-chat-item.active {
+      background: rgba(var(--c-brand-rgb), 0.08);
+    }
+    .sidebar-chat-item.active .chat-item-title { color: var(--c-brand); font-weight: var(--fw-s); }
     .sidebar-chat-item .chat-item-row {
       display: flex; align-items: center; gap: 8px;
     }
@@ -285,28 +329,15 @@
       min-width: 0; overflow: hidden;
     }
 
-    /* ── Main top bar (figma_files: h-16, backdrop-blur, border-b) ── */
-    .app-topbar {
-      height: 64px; flex-shrink: 0;
-      display: flex; align-items: center; gap: 8px;
-      padding: 0 16px;
-      background: rgba(255,255,255,0.9); backdrop-filter: blur(8px);
-      border-bottom: 1px solid var(--c-border);
-    }
-    .app-topbar-title {
-      font-size: 14px; font-weight: var(--fw-s); color: var(--c-text); white-space: nowrap;
-    }
-    .app-topbar-actions {
-      display: flex; align-items: center; gap: 8px; margin-left: auto;
-    }
-    /* figma_files: rounded-xl p-2 text-muted-foreground hover:bg-secondary */
-    .app-topbar-menu-btn {
-      width: 40px; height: 40px; border-radius: 12px;
+    /* ── Sidebar collapse button (top-right of sidebar header) ── */
+    .sidebar-collapse-btn {
+      width: 32px; height: 32px; border-radius: 8px;
       border: none; background: transparent; cursor: pointer;
-      color: var(--c-text-3); display: flex; align-items: center; justify-content: center;
-      transition: all 0.15s ease; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: var(--c-text-3); transition: all 0.15s ease; flex-shrink: 0;
     }
-    .app-topbar-menu-btn:hover { background: var(--c-secondary); color: var(--c-text); }
+    .sidebar-collapse-btn:hover { background: var(--c-sidebar-hover); color: var(--c-text); }
+    .sidebar-collapse-btn svg { width: 20px; height: 20px; flex-shrink: 0; }
 
     /* ── Main content ── */
     .app-main {
@@ -993,6 +1024,7 @@
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .chart-row { grid-template-columns: 1fr; }
       .app-left-menu { width: 200px; }
+      .sidebar-wrapper.expanded { width: 200px; }
       .date-range-bar { flex-wrap: wrap; }
       .sidebar-logo-icon { width: 28px; height: 28px; }
       .sidebar-logo-text { font-size: 15px; }
@@ -1000,7 +1032,6 @@
     @media (max-width: 768px) {
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .sidebar-wrapper { display: none; }
-      .app-topbar-menu-btn { display: flex !important; }
     }
 
     /* ── Header User Box ── */
@@ -1179,22 +1210,25 @@
   <!-- ════════════ APP LAYOUT: Sidebar + Main (figma_files) ════════════ -->
   <div class="app-layout" id="appLayout">
 
-    <!-- ── Sidebar wrapper (figma_files: w-[292px]↔w-0, transition-all duration-300) ── -->
+    <!-- ── Sidebar wrapper ── -->
     <div class="sidebar-wrapper expanded" id="sidebarWrapper">
       <aside class="app-left-menu" id="appLeftMenu">
-        <!-- Sidebar header (h-16, logo) -->
+        <!-- Sidebar header (logo + collapse btn) -->
         <div class="sidebar-header">
           <div class="sidebar-logo" onclick="switchPage('chat')">
             <img src="/front_end_assets/Avatar.svg" class="sidebar-logo-icon" alt="象象仔" />
             <div class="sidebar-logo-text">我的工作区</div>
           </div>
+          <button class="sidebar-collapse-btn" id="sidebarCollapseBtn" onclick="toggleSidebar()" title="折叠侧栏">
+            <svg id="sidebarToggleIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m15 9-3 3 3 3"/></svg>
+          </button>
         </div>
 
         <!-- New Chat -->
         <div style="padding:0 12px 12px">
           <button class="sidebar-new-chat" id="newChatSidebarBtn" onclick="switchPage('chat'); void(0)">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-            新建聊天
+            <span>新建聊天</span>
           </button>
         </div>
 
@@ -1234,15 +1268,6 @@
 
     <!-- ── Main wrap ── -->
     <div class="app-main-wrap">
-      <!-- Top bar (figma_files: h-16, backdrop-blur) -->
-      <div class="app-topbar">
-        <button class="app-topbar-menu-btn" id="topbarSidebarToggle" onclick="toggleSidebar()" title="切换侧栏">
-          <svg id="sidebarToggleIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m15 9-3 3 3 3"/></svg>
-        </button>
-        <span class="app-topbar-title" id="topbarTitle">象象仔</span>
-        <div class="app-topbar-actions" id="topbarActions"></div>
-      </div>
-
       <!-- Main content -->
       <main class="app-main">
 
@@ -1886,12 +1911,10 @@
   // ==================== 全局状态 ====================
   let currentPage = 'chat';
 
-  // ==================== 侧栏折叠 (figma_files: sidebarOpen, transition-all duration-300) ====================
+  // ==================== 侧栏折叠 ====================
   const _sidebarWrapper = document.getElementById('sidebarWrapper');
-  const _topbarSidebarToggle = document.getElementById('topbarSidebarToggle');
   const _sidebarToggleIcon = document.getElementById('sidebarToggleIcon');
 
-  // figma_files: PanelLeftClose / PanelLeftOpen (lucide)
   const SVG_PANEL_LEFT_CLOSE = '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m15 9-3 3 3 3"/>';
   const SVG_PANEL_LEFT_OPEN = '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>';
 
@@ -1899,9 +1922,6 @@
     if (!_sidebarWrapper) return;
     _sidebarWrapper.classList.toggle('collapsed', collapsed);
     _sidebarWrapper.classList.toggle('expanded', !collapsed);
-    if (_topbarSidebarToggle) {
-      _topbarSidebarToggle.style.display = 'flex';
-    }
     if (_sidebarToggleIcon) {
       _sidebarToggleIcon.innerHTML = collapsed ? SVG_PANEL_LEFT_OPEN : SVG_PANEL_LEFT_CLOSE;
     }
@@ -1913,7 +1933,7 @@
     Store.set('sidebarCollapsed', collapsed);
   }
 
-  // Restore persisted state (figma_files: useState(true) default open)
+  // Restore persisted state
   {
     const persisted = Store.get('sidebarCollapsed', false);
     applySidebarState(persisted);
@@ -1926,12 +1946,6 @@
     }
 
     currentPage = pageId;
-
-    // Update topbar title — figma_files 始终显示产品名
-    const titleEl = document.getElementById('topbarTitle');
-    if (titleEl) {
-      titleEl.textContent = '象象仔';
-    }
 
     // Update panel display
     document.querySelectorAll('.page-panel').forEach(p => p.classList.remove('active'));
@@ -1958,7 +1972,7 @@
       const badge = item.badge != null ? `<span class="nav-badge">${item.badge}</span>` : '';
       return `
       <button class="sidebar-nav-item ${currentPage === item.id ? 'active' : ''}" onclick="switchPage('${item.id}')" title="${item.label}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${item.icon}</svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${item.icon}</svg>
         <span>${item.label}</span>
         ${badge}
       </button>
@@ -3080,6 +3094,8 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   }
 
   async function switchToSession(sid) {
+    // 无论当前在哪个页面，点击 session 卡片都跳转到聊天页面
+    if (currentPage !== 'chat') switchPage('chat');
     if (sid === sessionId) return;
     sessionId = sid;
     Store.set('sessionId', sid);
