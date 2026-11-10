@@ -15,6 +15,7 @@ from dotenv import find_dotenv, load_dotenv
 from openai import AsyncOpenAI
 from pgvector import Vector
 from pgvector.psycopg import register_vector
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 
 from calculate_logic.rag.tokenizer import tokenize_for_tsquery
@@ -84,8 +85,8 @@ VERIFY_SSL = False                               # 是否验证 SSL 证书（Fal
 
 SEARCH_VECTOR_WEIGHT = 0.6                       # 向量语义检索权重：越大越依赖语义相似度
 SEARCH_KEYWORD_WEIGHT = 0.4                      # 关键词检索权重：越大越依赖字面匹配
-SEARCH_CANDIDATE_TOP_K = 20                      # 向量/关键词各自初选候选数（取 top-K 再 RRF 融合）
-SEARCH_COARSE_TOP_K = 20                         # RRF 融合后返回的粗排条数（送入 reranker 的候选数）
+SEARCH_CANDIDATE_TOP_K = 10                      # 向量/关键词各自初选候选数（取 top-K 再 RRF 融合）
+SEARCH_COARSE_TOP_K = 10                         # RRF 融合后返回的粗排条数（送入 reranker 的候选数）
 SEARCH_RERANK_TOP_K = 3                          # rerank 后最终返回条数（fixed 模式下；dynamic 模式仅为上限）
 SEARCH_RRF_K = 30                                # RRF 融合常数 = weight/(k+rank)：k 越大排名差异的分数影响越小；30 让 top 排名差异更显著
 
@@ -299,7 +300,25 @@ class PgHybridRetriever:
         self.rerank_client = rerank_client
         self.table_name = self._validate(table_name)
         self.ts_config = self._validate(ts_config)
+        self._pool: Optional[ConnectionPool] = None
         logger.info(f"检索器初始化: table={self.table_name}, ts_config={self.ts_config}")
+
+    def _get_pool(self) -> ConnectionPool:
+        if self._pool is None:
+            conninfo = (
+                f"host={self.db_config['host']} port={self.db_config['port']} "
+                f"dbname={self.db_config['dbname']} user={self.db_config['user']} "
+                f"password={self.db_config['password']}"
+            )
+            self._pool = ConnectionPool(
+                conninfo=conninfo,
+                min_size=1,
+                max_size=5,
+                open=True,
+                kwargs={"autocommit": True, "prepare_threshold": 0},
+            )
+            logger.info("[检索器] PG连接池已创建")
+        return self._pool
 
     @classmethod
     def from_env(cls, table_name: str = TABLE_NAME, ts_config: str = TS_CONFIG) -> "PgHybridRetriever":
@@ -331,10 +350,19 @@ class PgHybridRetriever:
         )
 
     # ----------------- 数据库检索 -----------------
-    def _get_conn(self) -> psycopg.Connection:
-        conn = psycopg.connect(**self.db_config)
+    def _get_conn(self):
+        """从连接池获取连接，返回的是上下文管理器"""
+        pool = self._get_pool()
+        conn = pool.getconn()
         register_vector(conn)
         return conn
+
+    def _return_conn(self, conn):
+        """归还连接到池"""
+        try:
+            self._get_pool().putconn(conn)
+        except Exception:
+            pass
 
     def _coarse_search(self, conn: psycopg.Connection, query_text: str, query_time: datetime,
                        query_embedding: List[float], vector_weight: float, keyword_weight: float,
@@ -420,7 +448,9 @@ class PgHybridRetriever:
                      vector_weight: float, keyword_weight: float,
                      candidate_top_k: int, coarse_top_k: int, rrf_k: int,
                      uid: str = "") -> List[Dict[str, Any]]:
-        with self._get_conn() as conn:
+        pool = self._get_pool()
+        with pool.connection() as conn:
+            register_vector(conn)
             return self._coarse_search(conn, query_text, query_time, query_embedding,
                                        vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid)
 
@@ -646,10 +676,13 @@ class PgHybridRetriever:
 
         score_map = {}
         if self.rerank_client is not None and coarse_results:
-            # rerank 用 child_content（经过指代消解后语义完整），给 reranker 精准的语义匹配
-            rerank_query = f"[Bilingual context: Chinese and English content may coexist] {query_text}"
-            rerank_texts = [h.child_content for h in coarse_results if h.child_content]
-            score_map = await self.rerank_client.arerank(rerank_query, rerank_texts)
+            if len(coarse_results) <= 3:
+                logger.info(f"[search] 候选≤{len(coarse_results)}条，跳过 rerank，直接用 RRF 排序")
+            else:
+                # rerank 用 child_content（经过指代消解后语义完整），给 reranker 精准的语义匹配
+                rerank_query = f"[Bilingual context: Chinese and English content may coexist] {query_text}"
+                rerank_texts = [h.child_content for h in coarse_results if h.child_content]
+                score_map = await self.rerank_client.arerank(rerank_query, rerank_texts)
 
         final_results, reason = self._rerank_select(coarse_results, rerank_top_k, score_map)
 
@@ -694,6 +727,36 @@ class PgHybridRetriever:
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
             raise ValueError(f"非法标识符: {value}")
         return value
+
+    def _fetch_sibling_child_contents(self, group_id: int, internal_id: int, uid: str = "") -> str:
+        """查询同父块(group_id)中 internal_id 前后各1个子块的 child_content，拼接返回。"""
+        pool = self._get_pool()
+        uid_filter = "AND c.uid = %(uid)s" if uid else ""
+        sql_text = f"""
+        SELECT c.internal_id, c.child_content
+        FROM {self.table_name} c
+        WHERE c.group_id = %(group_id)s
+          AND c.internal_id IN (%(prev_id)s, %(curr_id)s, %(next_id)s)
+          {uid_filter}
+        ORDER BY c.internal_id ASC
+        """
+        params: Dict[str, Any] = {
+            "group_id": group_id,
+            "prev_id": internal_id - 1,
+            "curr_id": internal_id,
+            "next_id": internal_id + 1,
+            "uid": uid,
+        }
+        try:
+            with pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql_text, params)
+                    rows = cur.fetchall()
+            parts = [row[1] for row in rows if row[1]]
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning(f"[检索器] 查询兄弟子块失败: group_id={group_id}, internal_id={internal_id}, err={e}")
+            return ""
 
 
 # ================= 本地测试 =================

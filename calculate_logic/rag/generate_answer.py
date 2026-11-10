@@ -30,7 +30,7 @@ from typesafe_sdk import TypeSafeClient, Noul, Choice
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
 
-REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_SESSIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
+REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "FAST_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_SESSIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # 安全 fallback：spawn 模式下 load_dotenv 可能未生效
@@ -78,7 +78,11 @@ def get_llm_client():
             model=config["TEXT_MODEL"],
             api_key=config["ACCESSCODE"],
             base_url=config["BASE_URL"],
-            http_client=httpx.Client(verify=False, timeout=30),
+            http_client=httpx.Client(
+                verify=False,
+                timeout=30,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            ),
             temperature=0.1,
             top_p=0.1,
         )
@@ -90,10 +94,14 @@ def get_fast_llm_client():
     global _fast_llm_client
     if _fast_llm_client is None:
         _fast_llm_client = ChatOpenAI(
-            model=config["TEXT_MODEL"],
+            model=config.get("FAST_MODEL") or config["TEXT_MODEL"],
             api_key=config["ACCESSCODE"],
             base_url=config["BASE_URL"],
-            http_client=httpx.Client(verify=False, timeout=30),
+            http_client=httpx.Client(
+                verify=False,
+                timeout=30,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            ),
             temperature=0.1,
             top_p=0.1,
         )
@@ -669,11 +677,20 @@ async def node_faq_match(state: ChatState) -> ChatState:
 retriever = PgHybridRetriever.from_env()
 async def do_retrieval(query: str, uid: str = "") -> dict:
     result = await retriever.search(query, uid=uid)
-    context = "\n".join([hit.parent_content for hit in result.final_results])
-    sources = [
-        {"file_name": hit.file_name, "content": hit.parent_content, "image_url": hit.image_url}
-        for hit in result.final_results
-    ]
+    # context 使用命中子块 + 同父块中前后各1个子块（共3个子块），节省 LLM 输入长度
+    # sources 保留完整父块，供前端展示来源和数据库持久化
+    context_parts = []
+    sources = []
+    for hit in result.final_results:
+        sibling_text = retriever._fetch_sibling_child_contents(
+            group_id=hit.group_id, internal_id=hit.internal_id, uid=uid
+        )
+        if sibling_text:
+            context_parts.append(sibling_text)
+        else:
+            context_parts.append(hit.child_content or "")
+        sources.append({"file_name": hit.file_name, "content": hit.parent_content, "image_url": hit.image_url})
+    context = "\n".join(context_parts)
     return context, sources
 
 async def node_retrieve(state: ChatState) -> ChatState:
