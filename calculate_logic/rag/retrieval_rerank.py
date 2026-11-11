@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -78,8 +79,8 @@ ACCESSCODE = os.getenv("ACCESSCODE", "")         # API 鉴权密钥
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "")  # Embedding 模型名称
 RERANK_MODEL = os.getenv("RERANK_MODEL", "")     # Rerank 模型名称
 RERANK_BASE_URL = os.getenv("RERANK_BASE_URL", "")  # Rerank DashScope 原生服务地址
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))    # Embedding 向量维度（qwen3-embedding-8b 原生 4096）
-MAX_TEXT_LENGTH = 1024                           # Embedding 输入文本最大字符数
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))    # Embedding 向量维度
+MAX_TEXT_LENGTH = 2048                           # Embedding 输入文本最大字符数
 EMBEDDING_TIMEOUT = 30.0                         # Embedding 请求超时（秒）
 RERANK_TIMEOUT = 30.0                            # Rerank 请求超时（秒）
 VERIFY_SSL = False                               # 是否验证 SSL 证书（False 则跳过，用于内网自签名证书）
@@ -89,7 +90,7 @@ SEARCH_KEYWORD_WEIGHT = 0.4                      # 关键词检索权重：越�
 SEARCH_CANDIDATE_TOP_K = 10                      # 向量/关键词各自初选候选数（取 top-K 再 RRF 融合）
 SEARCH_COARSE_TOP_K = 10                         # RRF 融合后返回的粗排条数（送入 reranker 的候选数）
 SEARCH_RERANK_TOP_K = 3                          # rerank 后最终返回条数（fixed 模式下；dynamic 模式仅为上限）
-SEARCH_RRF_K = 30                                # RRF 融合常数 = weight/(k+rank)：k 越大排名差异的分数影响越小；30 让 top 排名差异更显著
+SEARCH_RRF_K = 60                                # RRF 融合常数 = weight/(k+rank)：k 越大排名差异的分数影响越小；30 让 top 排名差异更显著
 
 SEARCH_DYNAMIC_TOPK = True                       # 是否启用动态 top-K（断崖检测自动截断，否则固定取 RERANK_TOP_K 条）
 SEARCH_FINAL_MIN_TOP_K = 2                       # 动态 top-K 最少保留条数
@@ -165,37 +166,40 @@ class CustomEmbeddingClient:
         self.url = config.get("url", "")
         self.model = config.get("model", "")
         self.accesscode = config.get("accesscode", "")
-        self.max_text_length = int(config.get("max_text_length", 1024))
+        self.max_text_length = int(config.get("max_text_length", 2048))
+        self.embedding_dim = int(config.get("embedding_dim", 0))
         self.timeout = float(config.get("timeout", 30))
         self.verify_ssl = config.get("verify_ssl", True)
         if isinstance(self.verify_ssl, str):
             self.verify_ssl = self.verify_ssl.lower() == "true"
 
         # OpenAI 风格异步客户端：base_url 自动拼接 /embeddings，鉴权自动带 Bearer 前缀
-        self.async_client = AsyncOpenAI(
-            api_key=self.accesscode,
-            base_url=self.url,
-            http_client=httpx.AsyncClient(
-                verify=self.verify_ssl,
-                timeout=httpx.Timeout(self.timeout, connect=10.0),
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
-            ),
-        )
+        try:
+            self.async_client = AsyncOpenAI(
+                api_key=self.accesscode,
+                base_url=self.url,
+                http_client=httpx.AsyncClient(
+                    verify=self.verify_ssl,
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
+                ),
+            )
+        except Exception as e:
+            logger.error(f"[Embedding] 客户端初始化失败: {e}")
+            raise
 
-        logger.info(f"Embedding初始化: model={self.model}")
+        logger.debug(f"Embedding初始化: model={self.model}, dim={self.embedding_dim}")
 
     async def text_embedding(self, texts: List[str]) -> List:
         """向量化。返回 np.ndarray 列表（每元素 float32）。"""
         clean = [t[:self.max_text_length] for t in texts if t and t.strip()]
         if not clean:
             return []
-        # 直接取模型原生维度（qwen3-embedding-8b 为 4096，不支持 dimensions 降维，
-        # 故不传 dimensions），与入库侧及 PG embedding vector(4096) 保持一致。
         try:
-            response = await self.async_client.embeddings.create(
-                model=self.model,
-                input=clean,
-            )
+            kwargs: Dict[str, Any] = {"model": self.model, "input": clean}
+            if self.embedding_dim and self.embedding_dim > 0:
+                kwargs["dimensions"] = self.embedding_dim
+            response = await self.async_client.embeddings.create(**kwargs)
             embeddings = [np.array(it.embedding, dtype=np.float32) for it in response.data if it.embedding]
             return embeddings
         except Exception as e:
@@ -226,20 +230,24 @@ class CustomRerankClient:
         self._client: Optional[httpx.AsyncClient] = None
 
         if self.base_url:
-            logger.info(f"Rerank初始化: base_url={self.base_url}, model={self.model}")
+            logger.debug(f"Rerank初始化: base_url={self.base_url}, model={self.model}")
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.base_url,
-                headers={
-                    "Authorization": f"Bearer {self.accesscode}",
-                    "Content-Type": "application/json",
-                },
-                verify=self.verify_ssl,
-                timeout=httpx.Timeout(self.timeout, connect=10.0),
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
-            )
+            try:
+                self._client = httpx.AsyncClient(
+                    base_url=self.base_url,
+                    headers={
+                        "Authorization": f"Bearer {self.accesscode}",
+                        "Content-Type": "application/json",
+                    },
+                    verify=self.verify_ssl,
+                    timeout=httpx.Timeout(self.timeout, connect=10.0),
+                    limits=httpx.Limits(max_connections=100, max_keepalive_connections=50),
+                )
+            except Exception as e:
+                logger.error(f"[Rerank] 客户端初始化失败: {e}")
+                raise
         return self._client
 
     def _build_payload(self, query: str, texts: List[str]) -> Dict[str, Any]:
@@ -319,7 +327,7 @@ class PgHybridRetriever:
         self.table_name = self._validate(table_name)
         self.ts_config = self._validate(ts_config)
         self._pool: Optional[ConnectionPool] = None
-        logger.info(f"检索器初始化: table={self.table_name}, ts_config={self.ts_config}")
+        logger.debug(f"检索器初始化: table={self.table_name}, ts_config={self.ts_config}")
 
     def _get_pool(self) -> ConnectionPool:
         if self._pool is None:
@@ -328,14 +336,18 @@ class PgHybridRetriever:
                 f"dbname={self.db_config['dbname']} user={self.db_config['user']} "
                 f"password={self.db_config['password']}"
             )
-            self._pool = ConnectionPool(
-                conninfo=conninfo,
-                min_size=1,
-                max_size=5,
-                open=True,
-                kwargs={"autocommit": True, "prepare_threshold": 0},
-            )
-            logger.info("[检索器] PG连接池已创建")
+            try:
+                self._pool = ConnectionPool(
+                    conninfo=conninfo,
+                    min_size=1,
+                    max_size=5,
+                    open=True,
+                    kwargs={"autocommit": True, "prepare_threshold": 0},
+                )
+                logger.debug("[检索器] PG连接池已创建")
+            except Exception as e:
+                logger.error(f"[检索器] PG连接池创建失败: {e}")
+                raise
         return self._pool
 
     @classmethod
@@ -353,6 +365,7 @@ class PgHybridRetriever:
                 "model": EMBEDDING_MODEL,
                 "accesscode": ACCESSCODE,
                 "max_text_length": MAX_TEXT_LENGTH,
+                "embedding_dim": EMBEDDING_DIM,
                 "timeout": EMBEDDING_TIMEOUT,
                 "verify_ssl": VERIFY_SSL,
             }),
@@ -506,15 +519,15 @@ class PgHybridRetriever:
         )
 
     def _dedup(self, hits: List[ChunkHit], top_k: Optional[int] = None) -> List[ChunkHit]:
-        """按 file_name+group_id 语义组去重（同组只保留最高分块），text_hash 做二级去重。"""
-        selected, seen_group, seen_hash = [], set(), set()
+        """按被选中子块去重（chunk_index 为主键，text_hash 做二级去重）。
+        因为返回的不是整个父块，而是命中子块+相邻子块，所以去重粒度应到子块级别。"""
+        selected, seen_chunk, seen_hash = [], set(), set()
         for h in hits:
-            group_key = f"{h.file_name}:{h.group_id}"
-            if group_key in seen_group:
+            if h.chunk_index in seen_chunk:
                 continue
             if h.text_hash in seen_hash:
                 continue
-            seen_group.add(group_key)
+            seen_chunk.add(h.chunk_index)
             seen_hash.add(h.text_hash)
             selected.append(h)
             if top_k is not None and len(selected) >= top_k:
@@ -540,7 +553,7 @@ class PgHybridRetriever:
         - Fallback：取默认的 rerank_top_k 条
         """
         if not hits:
-            return [], "empty_hits"
+            return [], "empty_hits, chunk_ids=[]"
 
         def _score(h: ChunkHit) -> float:
             return h.rerank_score if h.rerank_score is not None else h.similarity
@@ -554,11 +567,11 @@ class PgHybridRetriever:
         fallback_k = max(min_k, min(fallback_k, max_k))
 
         if n <= min_k:
-            return sorted_hits, f"hit_count_le_min_top_k, selected={n}"
+            return sorted_hits, f"hit_count_le_min_top_k, selected={n}, chunk_ids={[h.chunk_index for h in sorted_hits]}"
 
         if float(np.max(scores) - np.min(scores)) <= min_gap:
             k = min(fallback_k, n)
-            return sorted_hits[:k], f"flat_scores, selected={k}"
+            return sorted_hits[:k], f"flat_scores, selected={k}, chunk_ids={[h.chunk_index for h in sorted_hits[:k]]}"
 
         gaps = scores[:-1] - scores[1:]
         if len(gaps) > 0:
@@ -575,8 +588,9 @@ class PgHybridRetriever:
             if cliff_hit:
                 k = max(min_k, min(pos, max_k, n))
                 return sorted_hits[:k], (
-                    f"neighbor_score_cliff, max_gap={max_gap:.6f}, "
-                    f"avg_other_gap={avg_other:.6f}, gap_ratio={gap_ratio}, selected={k}"
+                    f"neighbor_score_cliff, max_gap={max_gap:.3f}, "
+                    f"avg_other_gap={avg_other:.3f}, gap_ratio={gap_ratio}, selected={k}, "
+                    f"chunk_ids={[h.chunk_index for h in sorted_hits[:k]]}"
                 )
 
         top_score = float(scores[0])
@@ -585,11 +599,12 @@ class PgHybridRetriever:
             k = max(min_k, min(int(np.sum(scores >= threshold)), max_k, n))
             return sorted_hits[:k], (
                 f"relative_score_fallback, ratio={ratio}, "
-                f"threshold={threshold:.6f}, selected={k}"
+                f"threshold={threshold:.6f}, selected={k}, "
+                f"chunk_ids={[h.chunk_index for h in sorted_hits[:k]]}"
             )
 
         k = min(fallback_k, n)
-        return sorted_hits[:k], f"fallback_top_k, selected={k}"
+        return sorted_hits[:k], f"fallback_top_k, selected={k}, chunk_ids={[h.chunk_index for h in sorted_hits[:k]]}"
 
     def _rerank_select(self, coarse_results: List[ChunkHit], rerank_top_k: int,
                        score_map: Optional[Dict[int, float]] = None) -> Tuple[List[ChunkHit], str]:
@@ -661,6 +676,7 @@ class PgHybridRetriever:
                      rerank_top_k: int = SEARCH_RERANK_TOP_K,
                      rrf_k: int = SEARCH_RRF_K,
                      uid: str = "") -> HybridSearchResponse:
+        t0 = time.time()
         logger.info(f"[search] 查询开始: query_text={query_text[:50]}...")
 
         query_text = query_text.strip()
@@ -682,6 +698,7 @@ class PgHybridRetriever:
         if not embeddings:
             raise RuntimeError("查询向量化失败")
         query_emb = embeddings[0].astype(float).tolist()
+        t1 = time.time()
 
         loop = asyncio.get_event_loop()
         rows = await loop.run_in_executor(
@@ -689,22 +706,27 @@ class PgHybridRetriever:
             lambda: self._sync_coarse(query_text, query_time, query_emb,
                                       vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid),
         )
+        t2 = time.time()
 
         coarse_results = [self._row_to_hit(r) for r in rows]
 
         score_map = {}
         if self.rerank_client is not None and coarse_results:
             if len(coarse_results) <= 3:
-                logger.info(f"[search] 候选≤{len(coarse_results)}条，跳过 rerank，直接用 RRF 排序")
+                logger.info(f"[search] 候选≤{len(coarse_results)}条，跳过 rerank")
             else:
-                # rerank 用 child_content（经过指代消解后语义完整），给 reranker 精准的语义匹配
                 rerank_query = f"[Bilingual context: Chinese and English content may coexist] {query_text}"
                 rerank_texts = [h.child_content for h in coarse_results if h.child_content]
                 score_map = await self.rerank_client.arerank(rerank_query, rerank_texts)
+        t3 = time.time()
 
         final_results, reason = self._rerank_select(coarse_results, rerank_top_k, score_map)
+        t4 = time.time()
 
-        logger.info(f"[search] 查询完成: 粗排{len(coarse_results)}条, 最终{len(final_results)}条, reason={reason}")
+        logger.info(
+            f"[search] 查询完成: 粗排{len(coarse_results)}条, 最终{len(final_results)}条, reason={reason} | "
+            f"耗时: embedding={t1-t0:.3f}s pg={t2-t1:.3f}s rerank={t3-t2:.3f}s select={t4-t3:.3f}s total={t4-t0:.3f}s"
+        )
         return self._build_resp(query_text, query_time, vector_weight, keyword_weight,
                                 candidate_top_k, coarse_top_k, rerank_top_k, rrf_k,
                                 coarse_results, final_results, reason)
