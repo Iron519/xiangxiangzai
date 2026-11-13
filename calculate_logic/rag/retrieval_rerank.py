@@ -55,6 +55,23 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 
+# ================= admin 知识库共享：admin 上传的文件对所有用户可检索 =================
+ADMIN_UID = os.getenv("ADMIN_UID", "admin")
+
+def _uid_filter_sql(uid: str, alias: str = "c") -> str:
+    """构建 SQL uid 过滤子句：包含用户自身 + admin 的文件。
+
+    返回空字符串表示不加过滤（uid 为空时）。
+    """
+    if not uid:
+        return ""
+    return f"AND {alias}.uid IN (%(uid)s, %(admin_uid)s)"
+
+def _uid_filter_params(uid: str) -> dict:
+    """配合 _uid_filter_sql 使用的参数 dict。"""
+    return {"uid": uid, "admin_uid": ADMIN_UID}
+
+
 # ================= 文本清理工具 =================
 # 匹配 Markdown 图片 ![alt](url) —— 去除空格容错
 _MD_IMG_RE = re.compile(r"!\[[^\]]*\]\s*\([^)]+\)\s*")
@@ -340,8 +357,12 @@ class _KbBM25Index:
         )
         try:
             with psycopg.connect(conninfo) as conn:
-                uid_filter = "AND uid = %s" if uid else ""
-                params = (uid,) if uid else ()
+                if uid:
+                    uid_filter = "AND uid IN (%s, %s)"
+                    params = (uid, ADMIN_UID)
+                else:
+                    uid_filter = ""
+                    params = ()
                 with conn.cursor() as cur:
                     cur.execute(
                         f"SELECT chunk_index, child_content FROM {table_name} "
@@ -544,7 +565,7 @@ class PgHybridRetriever:
                        query_embedding: List[float], candidate_top_k: int,
                        uid: str = "") -> List[Dict[str, Any]]:
         """向量塔：pgvector 余弦距离 top-K，返回完整行。"""
-        uid_filter = "AND c.uid = %(uid)s" if uid else ""
+        uid_filter = _uid_filter_sql(uid, "c")
         sql = f"""
         SELECT c.chunk_index, c.child_content, c.file_path, c.file_name, c.text_hash,
                FALSE::boolean AS is_qa, c.metadata, c.group_id, c.internal_id,
@@ -563,8 +584,8 @@ class PgHybridRetriever:
             "query_embedding": Vector(query_embedding),
             "query_time": query_time,
             "candidate_top_k": candidate_top_k,
-            "uid": uid,
         }
+        params.update(_uid_filter_params(uid))
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             return list(cur.fetchall())
@@ -950,7 +971,7 @@ class PgHybridRetriever:
     def _fetch_sibling_child_contents(self, group_id: int, internal_id: int, uid: str = "") -> str:
         """查询同父块(group_id)中 internal_id 前后各1个子块的 child_content，拼接返回。"""
         pool = self._get_pool()
-        uid_filter = "AND c.uid = %(uid)s" if uid else ""
+        uid_filter = _uid_filter_sql(uid, "c")
         sql_text = f"""
         SELECT c.internal_id, c.child_content
         FROM {self.table_name} c
@@ -964,8 +985,8 @@ class PgHybridRetriever:
             "prev_id": str(internal_id - 1),
             "curr_id": str(internal_id),
             "next_id": str(internal_id + 1),
-            "uid": uid,
         }
+        params.update(_uid_filter_params(uid))
         try:
             with pool.connection() as conn:
                 with conn.cursor() as cur:

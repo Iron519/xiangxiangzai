@@ -24,6 +24,8 @@ from calculate_logic.fetch_knowledge.parse_file import DocumentParser, PARSE_RES
 from calculate_logic.rag.retrieval_rerank import invalidate_kb_bm25
 from sso_did.auth import TokenData, get_current_user, get_current_user_sse
 
+ADMIN_UID = os.getenv("ADMIN_UID", "admin")
+
 
 # ============================================================
 # 调度入口：ChunkPipeline
@@ -612,7 +614,8 @@ async def kb_files(current_user: TokenData = Depends(get_current_user)):
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
-    files = await asyncio.to_thread(_query_kb_files_with_filter, uid)
+    is_admin = current_user.is_admin
+    files = await asyncio.to_thread(_query_kb_files_with_filter, uid, is_admin)
     return JSONResponse(content={"success": True, "files": files, "total": len(files)})
 
 
@@ -641,12 +644,13 @@ async def kb_upload_sse(token: str = "", current_user: TokenData = Depends(get_c
     - 有活跃任务时持续推送，无活跃任务后再推送一次最终快照然后关闭
     """
     uid = current_user.uid
+    is_admin = current_user.is_admin
 
     async def _snapshot():
         """收集一次完整快照：任务 + 统计 + 文件列表。"""
         tasks_raw = await asyncio.to_thread(_list_tasks, uid)
         tasks = [_serialize_task(t) for t in tasks_raw]
-        stats = await asyncio.to_thread(_kb_stats, uid)
+        stats = await asyncio.to_thread(_kb_stats, uid, is_admin)
         return tasks, stats
 
     async def _event_stream():
@@ -699,11 +703,14 @@ def _has_original_file(file_path: str, file_name: str, uid: str) -> bool:
     return (UPLOAD_DIR / uid / file_name).is_file()
 
 
-def _query_kb_files_with_filter(uid: str) -> list[dict]:
+def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
     """查询知识库文件列表，只返回同时满足以下三个条件的文件：
     1. 向量库（{KB_TABLE}）中有该文件的切片数据；
     2. 原文件存档存在（upload_kb/{uid}/ 下有物理文件）；
     3. 全文解析结果存在（parse_result/{uid}/{file_stem}/merged.md 存在）。
+
+    非管理员用户额外包含 admin 上传的共享文件（is_admin_shared=True 标记）。
+    管理员只看到自己上传的文件。
 
     返回与 _kb_stats 统一数据源的文件列表。
     """
@@ -712,22 +719,42 @@ def _query_kb_files_with_filter(uid: str) -> list[dict]:
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        k.file_name,
-                        COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
-                        k.file_path,
-                        COUNT(*)                                          AS total_chunks,
-                        COUNT(DISTINCT k.group_id)                        AS parent_chunks,
-                        MIN(k.upload_time)                                AS upload_time,
-                        MAX(k.update_time)                                AS last_update,
-                        COALESCE(MAX(k.file_size), 0)                     AS file_size
-                    FROM {KB_TABLE} k
-                    LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
-                    WHERE k.uid = %s
-                    GROUP BY k.file_name, k.file_path, k.original_name, t.original_name
-                    ORDER BY MIN(k.upload_time) DESC
-                """, (uid,))
+                if is_admin:
+                    cur.execute(f"""
+                        SELECT
+                            k.file_name,
+                            COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
+                            k.file_path,
+                            COUNT(*)                                          AS total_chunks,
+                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                            MIN(k.upload_time)                                AS upload_time,
+                            MAX(k.update_time)                                AS last_update,
+                            COALESCE(MAX(k.file_size), 0)                     AS file_size,
+                            k.uid
+                        FROM {KB_TABLE} k
+                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                        WHERE k.uid = %s
+                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name, k.uid
+                        ORDER BY MIN(k.upload_time) DESC
+                    """, (uid,))
+                else:
+                    cur.execute(f"""
+                        SELECT
+                            k.file_name,
+                            COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
+                            k.file_path,
+                            COUNT(*)                                          AS total_chunks,
+                            COUNT(DISTINCT k.group_id)                        AS parent_chunks,
+                            MIN(k.upload_time)                                AS upload_time,
+                            MAX(k.update_time)                                AS last_update,
+                            COALESCE(MAX(k.file_size), 0)                     AS file_size,
+                            k.uid
+                        FROM {KB_TABLE} k
+                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
+                        WHERE k.uid IN (%s, %s)
+                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name, k.uid
+                        ORDER BY MIN(k.upload_time) DESC
+                    """, (uid, ADMIN_UID))
                 rows = cur.fetchall()
 
         def _disk_size_by_path(file_path: str) -> int:
@@ -742,24 +769,28 @@ def _query_kb_files_with_filter(uid: str) -> list[dict]:
         for row in rows:
             file_name = row[0]
             file_path = row[2]
-            if not _has_original_file(file_path, file_name, uid):
+            file_owner_uid = row[8] or ""
+            is_shared = (not is_admin) and (file_owner_uid == ADMIN_UID)
+            check_uid = file_owner_uid if is_shared else uid
+            if not _has_original_file(file_path, file_name, check_uid):
                 skipped += 1
                 logger.debug(f"[KBFiles] 跳过 {file_name}: 原文件存档不存在")
                 continue
-            if not _has_parse_result(file_name, uid):
+            if not _has_parse_result(file_name, check_uid):
                 skipped += 1
                 logger.debug(f"[KBFiles] 跳过 {file_name}: 全文解析结果不存在")
                 continue
             files.append({
-                "file_name":      file_name,
-                "original_name":  row[1],
-                "file_path":      file_path,
-                "file_size":      row[7] or _disk_size_by_path(file_path),
-                "total_chunks":   row[3],
-                "parent_chunks":  row[4],
-                "upload_time":    row[5].isoformat() if row[5] else "",
-                "last_update":    row[6].isoformat() if row[6] else "",
-                "status":         "ingested",
+                "file_name":          file_name,
+                "original_name":      row[1],
+                "file_path":          file_path,
+                "file_size":          row[7] or _disk_size_by_path(file_path),
+                "total_chunks":       row[3],
+                "parent_chunks":      row[4],
+                "upload_time":        row[5].isoformat() if row[5] else "",
+                "last_update":        row[6].isoformat() if row[6] else "",
+                "status":             "ingested",
+                "is_admin_shared":    is_shared,
             })
 
         if skipped:
@@ -771,12 +802,13 @@ def _query_kb_files_with_filter(uid: str) -> list[dict]:
         return []
 
 
-def _kb_stats(uid: str) -> dict:
+def _kb_stats(uid: str, is_admin: bool = False) -> dict:
     """从知识库文件列表聚合统计：文档总数、索引片段总数、存储空间总大小。
 
     数据来源与 /kb/files 完全一致（_query_kb_files_with_filter），保证 KPI 卡片与文件列表一致。
+    非管理员用户的统计包含 admin 共享文件。
     """
-    files = _query_kb_files_with_filter(uid)
+    files = _query_kb_files_with_filter(uid, is_admin)
     doc_count = len(files)
     chunk_count = sum(f.get("total_chunks", 0) for f in files)
     total_size = sum(f.get("file_size", 0) for f in files)
@@ -796,7 +828,7 @@ async def kb_stats(current_user: TokenData = Depends(get_current_user)):
     - 索引片段 = COUNT(*) WHERE uid = current_user.uid
     - 存储空间 = 按文件去重后 SUM(MAX(file_size)) WHERE uid = current_user.uid
     """
-    stats = await asyncio.to_thread(_kb_stats, current_user.uid)
+    stats = await asyncio.to_thread(_kb_stats, current_user.uid, current_user.is_admin)
     return JSONResponse(content={"success": True, "stats": stats})
 
 
@@ -806,37 +838,22 @@ async def kb_file_parents(file_name: str, current_user: TokenData = Depends(get_
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
-    is_admin = current_user.is_admin
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                if is_admin:
-                    cur.execute(f"""
-                        SELECT
-                            chunk_index,
-                            group_id,
-                            internal_id,
-                            child_content AS content,
-                            parent_content AS related_content,
-                            upload_time
-                        FROM {KB_TABLE}
-                        WHERE file_name = %s
-                        ORDER BY group_id ASC, internal_id ASC
-                    """, (file_name,))
-                else:
-                    cur.execute(f"""
-                        SELECT
-                            chunk_index,
-                            group_id,
-                            internal_id,
-                            child_content AS content,
-                            parent_content AS related_content,
-                            upload_time
-                        FROM {KB_TABLE}
-                        WHERE file_name = %s
-                          AND uid = %s
-                        ORDER BY group_id ASC, internal_id ASC
-                    """, (file_name, uid))
+                cur.execute(f"""
+                    SELECT
+                        chunk_index,
+                        group_id,
+                        internal_id,
+                        child_content AS content,
+                        parent_content AS related_content,
+                        upload_time
+                    FROM {KB_TABLE}
+                    WHERE file_name = %s
+                      AND uid = %s
+                    ORDER BY group_id ASC, internal_id ASC
+                """, (file_name, uid))
                 rows = cur.fetchall()
 
         chunks = [
@@ -868,7 +885,6 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
     if not KB_TABLE:
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
-    is_admin = current_user.is_admin
     deleted_chunks = 0
     deleted_tasks = 0
     parse_result_removed = False
@@ -877,18 +893,19 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                # 先查出文件所属 uid（用于定位 parse_result 目录）
-                if is_admin:
-                    cur.execute(f"SELECT uid FROM {KB_TABLE} WHERE file_name = %s LIMIT 1", (file_name,))
-                    row = cur.fetchone()
-                    if row:
-                        file_uid = row[0] or uid
+                # 先查出文件所属 uid（用于判断是否为 admin 共享文件）
+                cur.execute(f"SELECT uid FROM {KB_TABLE} WHERE file_name = %s AND uid = %s LIMIT 1", (file_name, uid))
+                row = cur.fetchone()
+                if not row:
+                    # 文件不属于当前用户（可能是 admin 共享文件或其他用户的文件）
+                    return JSONResponse(
+                        status_code=403,
+                        content={"error": "无权删除此文件（该文件为管理员共享文件，仅管理员可删除）", "file_name": file_name},
+                    )
+                file_uid = row[0] or uid
 
-                # 1. 删知识库切片（admin 可删任意文件，普通用户只能删自己的）
-                if is_admin:
-                    cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s", (file_name,))
-                else:
-                    cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s AND uid = %s", (file_name, uid))
+                # 1. 删知识库切片（只能删自己的文件）
+                cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s AND uid = %s", (file_name, uid))
                 deleted_chunks = cur.rowcount
                 # 2. 删上传任务记录（save_name 或 original_name 命中）
                 cur.execute(
@@ -900,20 +917,9 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
 
         # 3. 删 parse_result/{uid}/{file_stem}/ 目录（同步删除解析中间结果）
         file_stem = Path(file_name).stem.replace(" ", "_")
-        # 尝试文件所属 uid 的 parse_result 目录
         parse_dir = Path(PARSE_RESULT_DIR) / file_uid / file_stem
         if not parse_dir.exists():
-            # 尝试当前用户的 parse_result 目录
             parse_dir = Path(PARSE_RESULT_DIR) / uid / file_stem
-        if not parse_dir.exists() and is_admin:
-            # admin 删除时搜索所有 uid 子目录
-            parse_root = Path(PARSE_RESULT_DIR)
-            if parse_root.is_dir():
-                for d in parse_root.iterdir():
-                    candidate = d / file_stem
-                    if candidate.exists() and candidate.is_dir():
-                        parse_dir = candidate
-                        break
         # 兼容旧结构：parse_result/{file_stem}/
         if not parse_dir.exists():
             old_parse_dir = Path(PARSE_RESULT_DIR) / file_stem
@@ -928,7 +934,6 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
 
         # 4. upload_kb 文件保留（以备追查），但孤儿文件（未入库）直接删磁盘
         if deleted_chunks == 0:
-            # 未入库的孤儿文件：尝试从 upload_kb/{uid}/ 或 upload_kb/ 删除
             for base in [UPLOAD_DIR / uid, UPLOAD_DIR / file_uid, UPLOAD_DIR]:
                 target = (base / file_name).resolve()
                 if str(target).startswith(str(UPLOAD_DIR.resolve())) and target.is_file():
@@ -1164,6 +1169,9 @@ async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
     row = _kb_file_row(file_name)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
+    # 非管理员不能编辑 admin 共享文件
+    if not current_user.is_admin and row.get("uid", "") == ADMIN_UID:
+        return JSONResponse(status_code=403, content={"error": "无权编辑管理员共享文件", "file_name": file_name})
     p = _merged_md_path(row["file_path"], row.get("uid", ""), row.get("original_name", ""))
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -1182,6 +1190,9 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
     row = _kb_file_row(file_name)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
+    # 非管理员不能对 admin 共享文件重新切片
+    if not current_user.is_admin and row.get("uid", "") == ADMIN_UID:
+        return JSONResponse(status_code=403, content={"error": "无权重切片管理员共享文件", "file_name": file_name})
     uid = current_user.uid if current_user else "anonymous"
 
     task_id = uuid.uuid4().hex[:12]

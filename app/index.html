@@ -2659,18 +2659,25 @@
         const safeFile = escapeHtml(f.file_name);
         const safeName = escapeHtml(f.original_name);
         const isOrphan = f.status === 'orphan';
+        const isAdminShared = f.is_admin_shared === true;
         const iconHtml = fileTypeSvg(ext);
 
         // 状态标签（Figma 风格胶囊标签）
         const statusTag = isOrphan
           ? `<span class="kb-status-tag kb-status-orphan" title="上传失败或未索引">${ICON_SVG.cross} 未入库</span>`
+          : isAdminShared
+          ? `<span class="kb-status-tag kb-status-ready" title="管理员共享文件">${ICON_SVG.check} 共享</span>`
           : `<span class="kb-status-tag kb-status-ready">${ICON_SVG.check} 已就绪</span>`;
-        const rowClick = isOrphan ? '' : `onclick="openChunkDrawer('${safeFile}', '${safeName}')"`;
-        const cursor = isOrphan ? 'default' : 'pointer';
+        // admin 共享文件：点击行打开全文（非切片），无 checkbox 不可批量删除
+        const rowClick = (isOrphan || isAdminShared) ? '' : `onclick="openChunkDrawer('${safeFile}', '${safeName}')"`;
+        const cursor = (isOrphan || isAdminShared) ? 'default' : 'pointer';
         const checked = _selectedFiles.has(f.file_name) ? 'checked' : '';
+        const checkboxHtml = isAdminShared
+          ? '<span style="opacity:0.3;cursor:not-allowed" title="管理员共享文件，不可删除">—</span>'
+          : `<input type="checkbox" ${checked} onchange="toggleFileSelect('${safeFile}', this.checked)">`;
         return `
           <tr style="cursor:${cursor}" ${rowClick}>
-            <td style="text-align:center" onclick="event.stopPropagation()"><input type="checkbox" ${checked} onchange="toggleFileSelect('${safeFile}', this.checked)"></td>
+            <td style="text-align:center" onclick="event.stopPropagation()">${checkboxHtml}</td>
             <td>
               <div class="file-name-cell">
                 ${iconHtml}
@@ -2682,15 +2689,15 @@
             <td>${uploadDate}</td>
             <td style="text-align:center">
               <div class="row-actions" style="gap:4px" onclick="event.stopPropagation()">
-                ${isOrphan ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
+                ${(isOrphan || isAdminShared) ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v18"/><path d="M15 3v18"/><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/></svg>
                 </button>`}
-                <button class="kb-action-btn" onclick="openParsedEditor('${safeFile}', '${safeName}')" title="查看全文">
+                <button class="kb-action-btn" onclick="openParsedEditor('${safeFile}', '${safeName}', ${isAdminShared})" title="查看全文">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>
                 </button>
-                <button class="kb-action-btn kb-action-danger" onclick="confirmDelete('${safeFile}', '${safeName}', '${f.status}')" title="删除文件">
+                ${isAdminShared ? '' : `<button class="kb-action-btn kb-action-danger" onclick="confirmDelete('${safeFile}', '${safeName}', '${f.status}')" title="删除文件">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                </button>
+                </button>`}
               </div>
             </td>
           </tr>
@@ -2720,7 +2727,7 @@
 
   // 全选/全不选
   function toggleSelectAllFiles(checked) {
-    if (checked) _kbFiles.forEach(f => _selectedFiles.add(f.file_name));
+    if (checked) _kbFiles.forEach(f => { if (!f.is_admin_shared) _selectedFiles.add(f.file_name); });
     else _selectedFiles.clear();
     renderFileRows();
     updateBatchBar();
@@ -2820,7 +2827,7 @@
   let _parsedDirty = false; // 是否有未保存修改
   let _parsedEditMode = false; // 是否处于编辑模式
 
-  function openParsedEditor(fileName, originalName) {
+  function openParsedEditor(fileName, originalName, readOnly) {
     _parsedFile = fileName;
     _parsedName = originalName;
     _parsedDirty = false;
@@ -2848,8 +2855,10 @@
         ta.disabled = false;
         document.getElementById('parsedSaveStatus').textContent = data.has_text ? '已加载' : '暂无文本';
         renderParsedPreview();
-        // 加载完成后显示编辑切换按钮
-        document.getElementById('parsedEditToggleBtn').style.display = 'inline-flex';
+        // admin 共享文件：只读，不显示编辑按钮
+        if (!readOnly) {
+          document.getElementById('parsedEditToggleBtn').style.display = 'inline-flex';
+        }
       // 绑定输入监听：标记脏状态、实时预览
       ta.oninput = () => {
         _parsedDirty = true;
@@ -2859,7 +2868,9 @@
       .catch(err => {
         document.getElementById('parsedSaveStatus').textContent = '加载失败';
         document.getElementById('parsedPreview').innerHTML = `<div style="color:var(--c-rose)">加载失败：${escapeHtml(err.message)}</div>`;
-        document.getElementById('parsedEditToggleBtn').style.display = 'inline-flex';
+        if (!readOnly) {
+          document.getElementById('parsedEditToggleBtn').style.display = 'inline-flex';
+        }
       });
   }
 
@@ -2968,7 +2979,13 @@
 
 function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; }
   function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
-  function renderMarkdown(t) { marked.setOptions({breaks:true,gfm:true}); return marked.parse(t); }
+  function renderMarkdown(t) {
+    marked.setOptions({breaks:true,gfm:true});
+    // 转义单独的 ~ 字符，防止 marked 将 ~text~ 或 ~~text~~ 误渲染为删除线 <del>
+    // LLM 常输出 ~ 作为范围符号（如 5~10），而非 markdown 删除线语法
+    t = t.replace(/~+/g, m => m.replace(/~/g, '&#126;'));
+    return marked.parse(t);
+  }
   // 将 markdown 中的 /api/media/ 图片替换为带鉴权的 blob URL（<img src> 无法携带 Authorization 头）
   async function enhanceMediaImages(container) {
     const imgs = container.querySelectorAll('img[src^="/api/media/"]');
@@ -3436,7 +3453,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   function initPlaceholderTypewriter() {
     const textarea = document.getElementById('chatInput');
     if (!textarea) return;
-    const phrases = ['你好呀，和象象仔聊聊天吧....', '记得构建好我们对话的基础（知识库）哦....', '我会以你提供的知识为准，不会凭空捏造....', '和象象仔的每一次对话，都会构成我眼中的你....'];
+    const phrases = ['你好呀，和象象仔聊聊天吧....', '只有构建好知识库，我才能回答你的问题....', '我会严格以知识库信息为准，绝不凭空捏造....', '利用好追问，它将以轻松友好的方式带你逐步深入....', '每一次对话，都会构成我眼中的你....'];
     let phraseIndex = 0, charIndex = 0, isDeleting = false, isPaused = false;
     
     function type() {

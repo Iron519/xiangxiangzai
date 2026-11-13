@@ -1119,20 +1119,6 @@ def close_checkpointer() -> None:  # 关闭 checkpoint 连接池。供应用关�
 
 # ================= chat session 管理函数 =================
 
-# /test U00XXXXX 命令解析：admin 用户可模拟指定 uid 进行测试
-_TEST_UID_PATTERN = re.compile(r"^/test\s+(U00\d{5})\s*(.*)", re.DOTALL)
-
-def _parse_test_command(message: str, current_user: TokenData) -> tuple[str, str]:
-    if not current_user.is_admin:
-        return current_user.uid, message
-    m = _TEST_UID_PATTERN.match(message.strip())
-    if m:
-        test_uid = m.group(1)
-        rest = m.group(2).strip()
-        logger.info(f"[TestCommand] admin 模拟 uid={test_uid}, 原始消息前50: {rest[:50] if rest else '(empty)'}...")
-        return test_uid, rest
-    return current_user.uid, message
-
 def _make_config(session_id: str) -> dict:
     return {"configurable": {"thread_id": session_id}}
 
@@ -1177,9 +1163,7 @@ async def chat_stream(
     message: str = Body(...),  # 取自请求体JSON，字段为message，必填
     current_user: TokenData = Depends(get_current_user),  # 不从body取，依赖注入
 ):
-    # 解析 /test U00XXXXX 命令：admin 可模拟指定 uid
-    uid, message = _parse_test_command(message, current_user)
-
+    uid = current_user.uid
     # ── Session 管理：归属校验 / 新建 / 超限软删 ──
     is_new_session = False
     if session_id:
