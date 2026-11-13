@@ -8,8 +8,7 @@
 
 重写模式（rewrite_mode）：
 - "none":  关闭重写，跳过全部子块
-- "smart": 智能重写（默认），仅对含代词的子块发 LLM 请求，省 token
-- "force": 强制重写，所有子块（除过短/纯图片外）都发 LLM 请求
+- "smart": 智能重写，仅对含代词的子块发 LLM 请求，省 token
 """
 
 import asyncio
@@ -101,11 +100,10 @@ def _build_user_prompt(child_content: str, parent_content: str) -> str:
 
 
 # ==================== 核心：单个子块重写 ====================
-async def _rewrite_one(child_content: str, parent_content: str, *, force: bool = False) -> str:
+async def _rewrite_one(child_content: str, parent_content: str) -> str:
     """对单个子块做 LLM 指代消解+重写，返回重写后的文本。
 
-    - force=False（智能模式）：不含代词的子块直接跳过，不发 LLM 请求
-    - force=True（强制模式）：跳过代词预检，所有子块都发 LLM 请求
+    不含代词的子块直接跳过，不发 LLM 请求。
     """
     # 太短的子块（如纯表格、图片链接）不重写
     stripped = child_content.strip()
@@ -114,8 +112,8 @@ async def _rewrite_one(child_content: str, parent_content: str, *, force: bool =
     # 纯图片链接行不重写
     if re.fullmatch(r"\s*!\[[^\]]*\]\([^)]+\)\s*", stripped):
         return child_content
-    # 代词预检：智能模式下没有代词/指代词的子块直接跳过
-    if not force and not _has_pronoun(stripped):
+    # 代词预检：没有代词/指代词的子块直接跳过
+    if not _has_pronoun(stripped):
         return child_content
 
     llm = _get_rewrite_llm()
@@ -143,7 +141,7 @@ async def rewrite_chunks_with_coref(
     chunks: Sequence[SemanticChunkOutput],
     *,
     skip_short: bool = True,
-    rewrite_mode: str = "smart",
+    rewrite_mode: str = "none",
 ) -> None:
     """对一批语义子块做指代消解+重写（就地修改 child_content）。
 
@@ -151,8 +149,7 @@ async def rewrite_chunks_with_coref(
     - skip_short: 跳过过短子块（< 30 字符），不浪费 LLM 调用
     - rewrite_mode: 重写模式
         "none":  关闭重写
-        "smart": 智能重写（默认），仅含代词的子块发 LLM 请求
-        "force": 强制重写，所有子块（除过短/纯图片外）都发 LLM 请求
+        "smart": 智能重写，仅含代词的子块发 LLM 请求
     - 原文始终保留在 parent_content 中，重写结果写回 child_content
     - 并发控制：最多 5 个同时重写
     """
@@ -165,11 +162,7 @@ async def rewrite_chunks_with_coref(
         logger.info(f"[Rewrite] 子块重写已关闭（rewrite_mode=none），跳过全部 {total} 个子块")
         return
 
-    force = rewrite_mode == "force"
-    if force:
-        logger.info(f"[Rewrite] 强制重写模式：全部子块（除过短/纯图片外）都会发 LLM 请求")
-    else:
-        logger.info(f"[Rewrite] 智能重写模式：仅含代词的子块发 LLM 请求")
+    logger.info(f"[Rewrite] 智能重写模式：仅含代词的子块发 LLM 请求")
 
     rewrite_count = 0
     skip_count = 0
@@ -188,12 +181,12 @@ async def rewrite_chunks_with_coref(
         if re.fullmatch(r"\s*!\[[^\]]*\]\([^)]+\)\s*", child):
             skip_count += 1
             continue
-        # 智能模式：没有代词的子块跳过 LLM 调用
-        if not force and not _has_pronoun(child):
+        # 没有代词的子块跳过 LLM 调用
+        if not _has_pronoun(child):
             pronoun_skip_count += 1
             continue
 
-        tasks.append(_rewrite_one(child, parent, force=force))
+        tasks.append(_rewrite_one(child, parent))
         indices_to_rewrite.append(i)
 
     if not tasks:

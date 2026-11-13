@@ -603,6 +603,25 @@
       color: var(--c-text-2); margin: 12px 0 4px;
     }
     .modal-hint { font-size: var(--fs-xs); color: var(--c-text-3); margin-top: 8px; }
+    .help-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--c-gray-3);
+      background: var(--c-card); color: var(--c-text-3); font-size: 10px; font-weight: 600;
+      cursor: help; flex-shrink: 0; position: relative; vertical-align: baseline;
+      margin-left: 2px; transform: translateY(-1px);
+      transition: border-color .15s, color .15s;
+    }
+    .help-badge:hover { border-color: var(--c-brand); color: var(--c-brand); }
+    .help-badge::after {
+      content: attr(data-tip);
+      position: absolute; bottom: calc(100% + 6px); left: 0;
+      background: var(--c-card); color: var(--c-text-2); font-size: 12px; font-weight: 400; line-height: 1.6;
+      padding: 8px 12px; border-radius: 6px; white-space: normal; width: 220px; text-align: left;
+      border: 1px solid var(--c-border);
+      opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 300;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+    }
+    .help-badge:hover::after { opacity: 1; }
     .modal-footer {
       display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px;
       border-top: 1px solid var(--c-border);
@@ -691,8 +710,8 @@
     }
     .dm-header-right { display: flex; align-items: center; gap: 8px; position: relative; }
     .dm-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 8px 14px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+      display: inline-flex; align-items: center; gap: 6px; height: 40px;
+      padding: 0 14px; border-radius: var(--r-md); border: 1px solid var(--c-border);
       background: var(--c-card); color: var(--c-text-3); font-size: 12px; font-weight: var(--fw-m);
       font-family: var(--ff); cursor: pointer; transition: all var(--dur);
     }
@@ -1069,7 +1088,7 @@
     }
 
     /* ════════════ KNOWLEDGE BASE PAGE (Figma Design) ════════════ */
-    .kb-page { padding: 20px 24px 0; max-width: 1152px; margin: 0 auto; }
+    .kb-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; }
 
     .kb-page-header {
       display: flex; justify-content: space-between; align-items: center;
@@ -1092,8 +1111,8 @@
     }
     .kb-page-header-actions { display: flex; align-items: center; gap: 8px; position: relative; }
     .kb-upload-btn {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 8px 14px; border-radius: var(--r-md); border: 1px solid var(--c-border);
+      display: inline-flex; align-items: center; gap: 6px; height: 40px;
+      padding: 0 14px; border-radius: var(--r-md); border: 1px solid var(--c-border);
       background: var(--c-card); color: var(--c-text-3); font-size: 12px; font-weight: var(--fw-m);
       font-family: var(--ff); cursor: pointer; transition: all var(--dur);
     }
@@ -1333,8 +1352,9 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
             <input type="text" id="kbSearchInput" placeholder="搜索文件名" oninput="filterFileList()">
           </div>
-          <button class="kb-upload-btn kb-btn-icon" id="uploadFab" type="button" title="上传文件">
+          <button class="kb-upload-btn" id="uploadFab" type="button" title="上传文件">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+            <span>上传文件</span>
           </button>
         </div>
       </div>
@@ -1585,8 +1605,9 @@
                       <span id="dmDateLabel">最近 7 天</span>
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="m6 9 6 6 6-6"></path></svg>
                     </button>
-                    <button class="dm-btn dm-btn-icon" id="dmExportBtn" title="导出数据">
+                    <button class="dm-btn" id="dmExportBtn" title="导出数据">
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" x2="12" y1="15" y2="3"></line></svg>
+                      <span>导出数据</span>
                     </button>
                     <div id="dmDatePicker" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--c-card);border:1px solid var(--c-border);border-radius:var(--r-sm);padding:12px;box-shadow:0 4px 16px rgba(0,0,0,0.12);z-index:100">
                       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -1594,7 +1615,7 @@
                         <span style="color:var(--c-text-3);font-size:13px">—</span>
                         <input type="date" id="statsDateTo" style="padding:5px 10px;border:1px solid var(--c-gray-3);border-radius:6px;font-size:13px;font-family:var(--ff);color:var(--c-text);background:var(--c-card);outline:none">
                       </div>
-                      <button id="dateApplyBtn" style="width:100%;padding:6px;border-radius:6px;border:none;background:var(--c-brand);color:#fff;font-size:13px;font-weight:var(--fw-m);font-family:var(--ff);cursor:pointer">应用</button>
+                      <button id="dateApplyBtn" style="width:100%;padding:6px;border-radius:6px;border:none;background:var(--c-brand);color:#fff;font-size:13px;font-weight:var(--fw-m);font-family:var(--ff);cursor:pointer">查询</button>
                     </div>
                   </div>
                 </div>
@@ -1679,36 +1700,44 @@
 <!-- 上传前改名弹窗 -->
 <div class="modal-overlay" id="renameModal" style="display:none">
   <div class="modal-dialog">
-    <div class="modal-header">重命名文件</div>
+    <div class="modal-header">文件信息</div>
     <div class="modal-body">
+      <label class="modal-field-label" style="margin:0 0 4px">文件名 <span class="help-badge" data-tip="仅修改显示名称，不影响原始文件内容。">?</span></label>
       <input type="text" class="modal-input" id="renameInput" placeholder="输入文件名" />
-      <p class="modal-hint">仅修改显示名称，不影响原始文件内容</p>
       <div id="renameMoreToggle" style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:16px;color:var(--c-text-2);font-size:var(--fs-xs);user-select:none">
         <svg id="renameMoreArrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .2s;transform:rotate(-90deg)"><polyline points="6 9 12 15 18 9"/></svg>
         更多选项
       </div>
       <div id="renameMoreSection" style="display:none;margin-top:8px">
-        <label class="modal-field-label" for="expireInput">过期时间（可选）</label>
-        <input type="datetime-local" class="modal-input" id="expireInput" />
-        <p class="modal-hint">留空表示永久有效。过期文件将被排除在搜索之外。</p>
-        <label class="modal-field-label" for="ifShowInput" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px">
-          <input type="checkbox" id="ifShowInput" checked />
-          展示此文件中的图片
-        </label>
-        <p class="modal-hint">取消勾选：此文件的图片不会在搜索/聊天结果中展示（文字仍可检索）。</p>
-        <label class="modal-field-label">子块重写（指代消解）</label>
+        <label class="modal-field-label">文件期限 <span class="help-badge" data-tip="若选择临时，则以填写的日期为过期时间，过期文件将排除在检索之外。">?</span></label>
         <div style="display:flex;gap:16px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-            <input type="radio" name="rewriteMode" value="smart" checked /> 智能重写
+            <input type="radio" name="expireRadio" value="permanent" checked /> 永久
           </label>
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-            <input type="radio" name="rewriteMode" value="force" /> 强制重写
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-            <input type="radio" name="rewriteMode" value="none" /> 关闭
+            <input type="radio" name="expireRadio" value="temporary" /> 临时
           </label>
         </div>
-        <p class="modal-hint">智能重写：仅对含代词的子块重写，省 token。强制重写：所有子块都重写，效果最佳但消耗更多。关闭：跳过重写。</p>
+        <input type="text" class="modal-input" id="expireInput" placeholder="YYYY/MM/DD" maxlength="10"
+               style="margin-top:8px;display:none;font-family:var(--ff-mono);letter-spacing:1px" />
+        <label class="modal-field-label">是否展示文件内图片 <span class="help-badge" data-tip="选择不展示，文件内图片将不会被展示，但图片内容仍可正常检索。">?</span></label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="ifShowRadio" value="true" checked /> 展示
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="ifShowRadio" value="false" /> 不展示
+          </label>
+        </div>
+        <label class="modal-field-label">子块重写 <span class="help-badge" data-tip="开启后，将对子块进行指代消解重写，提升检索准确率，但会消耗额外Token。">?</span></label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="rewriteMode" value="smart" /> 开启
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="rewriteMode" value="none" checked /> 关闭
+          </label>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -2036,9 +2065,11 @@
     // 弹出改名弹窗
     pendingFile = file;
     renameInput.value = file.name.replace(/\.[^.]+$/, '');
-    expireInput.value = '';   // 默认空 = 永久有效
-    ifShowInput.checked = true;  // 默认允许展示图片
-    document.querySelector('input[name="rewriteMode"][value="smart"]').checked = true;  // 默认智能重写
+    document.querySelector('input[name="expireRadio"][value="permanent"]').checked = true;  // 默认永久
+    expireInput.value = '';
+    expireInput.style.display = 'none';  // 默认隐藏填写框
+    document.querySelector('input[name="ifShowRadio"][value="true"]').checked = true;  // 默认展示图片
+    document.querySelector('input[name="rewriteMode"][value="none"]').checked = true;  // 默认关闭重写
     renameMoreSection.style.display = 'none';  // 默认收起"更多"
     renameMoreArrow.style.transform = 'rotate(-90deg)';
     renameModal.style.display = 'flex';
@@ -2049,13 +2080,28 @@
   const renameModal = document.getElementById('renameModal');
   const renameInput = document.getElementById('renameInput');
   const expireInput = document.getElementById('expireInput');
-  const ifShowInput = document.getElementById('ifShowInput');
   const renameMoreSection = document.getElementById('renameMoreSection');
   const renameMoreArrow = document.getElementById('renameMoreArrow');
   document.getElementById('renameMoreToggle').addEventListener('click', () => {
     const expanded = renameMoreSection.style.display !== 'none';
     renameMoreSection.style.display = expanded ? 'none' : 'block';
     renameMoreArrow.style.transform = expanded ? 'rotate(-90deg)' : 'rotate(0deg)';
+  });
+  // 文件期限：永久/临时切换
+  document.querySelectorAll('input[name="expireRadio"]').forEach(r => {
+    r.addEventListener('change', () => {
+      const isTemp = r.value === 'temporary' && r.checked;
+      expireInput.style.display = isTemp ? 'block' : 'none';
+      if (!isTemp) expireInput.value = '';
+    });
+  });
+  // 过期日期输入框：自动格式化 YYYY/MM/DD
+  expireInput.addEventListener('input', (e) => {
+    let v = e.target.value.replace(/[^\d]/g, '');
+    if (v.length > 8) v = v.slice(0, 8);
+    if (v.length > 4) v = v.slice(0, 4) + '/' + v.slice(4);
+    if (v.length > 7) v = v.slice(0, 7) + '/' + v.slice(7);
+    e.target.value = v;
   });
   document.getElementById('renameConfirm').addEventListener('click', async () => {
     if (!pendingFile) return;
@@ -2077,11 +2123,13 @@
     }
     const expireVal = expireInput.value.trim();
     if (expireVal) {
-      formData.append('expire_time', expireVal);
+      // YYYY/MM/DD → ISO 8601 (YYYY-MM-DDT23:59)
+      const m = expireVal.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+      if (m) formData.append('expire_time', `${m[1]}-${m[2]}-${m[3]}T23:59`);
     }
-    formData.append('if_show', ifShowInput.checked);
+    formData.append('if_show', document.querySelector('input[name="ifShowRadio"]:checked')?.value !== 'false');
     const rewriteMode = document.querySelector('input[name="rewriteMode"]:checked');
-    formData.append('rewrite_mode', rewriteMode ? rewriteMode.value : 'smart');
+    formData.append('rewrite_mode', rewriteMode ? rewriteMode.value : 'none');
 
     try {
       const res = await apiFetch('/chunk/upload', { method: 'POST', body: formData });

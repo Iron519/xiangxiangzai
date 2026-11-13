@@ -307,7 +307,7 @@ async def _trigger_next_queued(uid: str) -> None:
 async def _background_process(task_id: str, save_path: str, original_name: str, uid: str = "anonymous",
                               expire_time: Optional[str] = None,
                               if_show: bool = True,
-                              rewrite_mode: str = "smart") -> None:
+                              rewrite_mode: str = "none") -> None:
     """后台协程：解析 → [解析完成] → 切块 → 向量化 → 入库 → [注入完成]。
 
     两阶段进度：
@@ -417,7 +417,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
 
 async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                               original_name: str, uid: str = "anonymous", if_show: bool = True,
-                              rewrite_mode: str = "smart") -> None:
+                              rewrite_mode: str = "none") -> None:
     """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。"""
     embedding_model = None
     try:
@@ -509,7 +509,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"
 @router.post("/chunk/upload")
 async def upload_file(file: UploadFile = File(...), display_name: str = Form(None),
                       expire_time: str = Form(None), if_show: bool = Form(False),
-                      rewrite_mode: str = Form("smart"),
+                      rewrite_mode: str = Form("none"),
                       overwrite: bool = Form(False),
                       current_user: TokenData = Depends(get_current_user)):
     """上传知识库文件，保存后立即返回 task_id，后台异步执行解析入库流程。
@@ -521,7 +521,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     expire_time: 可选，文件过期时间（ISO 8601 字符串，如 "2026-12-31T23:59"）。
                  不传或为空则视为永久有效。检索时自动过滤已过期文件。
     if_show: 该文件内含的图片是否允许在检索结果/聊天中展示。False 时不展示图片，文字仍正常检索。
-    rewrite_mode: 子块重写模式。"smart"=智能重写（仅含代词的子块），"force"=强制重写（所有子块），"none"=关闭。
+    rewrite_mode: 子块重写模式。"smart"=开启（仅对含代词的子块重写），"none"=关闭。
     overwrite: 若 upload_kb/{uid}/ 下已有同名文件，是否直接覆盖。False 时返回 409 让前端确认。
     """
     uid = current_user.uid  # 已登录用户的真实账号
@@ -1203,7 +1203,7 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
     asyncio.create_task(_background_rechunk(task_id, row["file_name"], row["file_path"],
                                             row["original_name"], uid=uid,
                                             if_show=row.get("if_show", True),
-                                            rewrite_mode="smart"))
+                                            rewrite_mode="none"))
     return JSONResponse(content={"success": True, "task_id": task_id,
                                  "original_name": row["original_name"],
                                  "message": "已开始重新切片入库"})
