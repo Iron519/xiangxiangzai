@@ -3,7 +3,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import requests
 import urllib3
+import os
 import logging
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+_TOOL_ERROR = os.getenv("FALLBACK_TOOL_ERROR", "相关查询暂时不可用，请稍后再试。").strip()
 # 抑制SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("ToolWorkingTime")
@@ -32,7 +36,7 @@ def fetch_working_time(input_parameters: QueryWorkingTime):
         
         if response_json.get("code") != 200:
             logger.error(f"API返回错误: {response_json}")
-            return "查询工时暂时不可用，请稍后再试"
+            return _TOOL_ERROR
         
         data = response_json["data"]
         es_wta = data.get("esWTA", {})
@@ -83,7 +87,7 @@ def fetch_working_time(input_parameters: QueryWorkingTime):
 
     except Exception as e:
         logger.error(f"查询工时失败: {e}")
-        return "查询工时暂时不可用，请稍后再试"
+        return _TOOL_ERROR
 
 @tool
 def query_working_time(input_parameters: QueryWorkingTime) -> dict:

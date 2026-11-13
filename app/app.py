@@ -18,6 +18,8 @@ if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from calculate_logic.rag.generate_answer import router as chat_router, close_checkpointer, preload_faq_index
+from calculate_logic.rag.retrieval_rerank import preload_kb_bm25, invalidate_kb_bm25
+from calculate_logic.rag.warmup import run_sync_warmup, run_async_warmup
 from table_data.chat_tag import tag_loop
 from calculate_logic.chunk_pipeline.routes import router as chunk_router
 from table_data.chat_report import router as report_router
@@ -92,17 +94,23 @@ async def _recover_queued_on_startup():
 
 
 @app.on_event("startup")
-async def _preload_faq_on_startup():
-    """启动预热 FAQ BM25 索引。
+async def _warmup_on_startup():
+    """统一预热：在 uvicorn 开始接受请求前，将所有懒加载的客户端/连接池/API 连接提前初始化。
 
-    每个 worker 进程独立持有 FAQ 缓存，全部需预构建，避免首个请求
-    现场对 kb 全量语料分词算 IDF（同步执行会阻塞事件循环数秒）。
-    同步构建，保证第一个请求到达时索引已就绪。
+    分两阶段：
+    1. 同步预热：LLM 单例实例化、PG/Redis 连接池创建、BM25 索引构建
+    2. 异步预热：Embedding/Rerank/LLM API 的 TCP/TLS 连接建立（并发执行）
+
+    预热失败不阻断启动（各组件有懒加载兜底，首次请求时会重试初始化）。
     """
     try:
-        preload_faq_index()
+        run_sync_warmup()
     except Exception as e:
-        logger.warning(f"[Startup] FAQ索引预热失败（首次请求时按需加载）: {e}")
+        logger.error(f"[Startup] 同步预热失败: {e}")
+    try:
+        await run_async_warmup()
+    except Exception as e:
+        logger.error(f"[Startup] 异步预热失败: {e}")
 
 
 @app.on_event("startup")

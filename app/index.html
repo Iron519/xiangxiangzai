@@ -830,7 +830,7 @@
       max-width: 70%; padding: var(--sp-4) var(--sp-5);
       background: var(--c-secondary);
       color: var(--c-text);
-      border-radius: var(--r-lg) var(--r-lg) var(--sp-1) var(--r-lg);
+      border-radius: var(--r-lg) var(--r-lg) var(--r-lg) var(--sp-1);
       font-size: var(--fs-sm); line-height: 1.6;
     }
     .chat-msg--user .chat-msg__avatar {
@@ -840,7 +840,7 @@
       font-size: 12px; font-weight: var(--fw-s); flex-shrink: 0;
       box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     }
-    .chat-msg--ai { display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 16px; }
+    .chat-msg--ai { display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 16px; align-items: flex-start; }
     .chat-msg--ai .chat-msg__avatar {
       width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
       object-fit: contain;
@@ -875,6 +875,15 @@
       border: 1px solid var(--c-border); background: #f1f5f9;
       cursor: zoom-in;
     }
+    .chat-msg--ai .chat-msg__bubble table { border-collapse: collapse; width: 100%; margin: 0.8em 0; font-size: 0.9em; }
+    .chat-msg--ai .chat-msg__bubble th, .chat-msg--ai .chat-msg__bubble td { border: 1px solid var(--c-border); padding: 6px 10px; text-align: left; }
+    .chat-msg--ai .chat-msg__bubble th { background: var(--c-card); font-weight: var(--fw-s); }
+    .chat-msg--ai .chat-msg__bubble blockquote { border-left: 3px solid var(--c-brand); padding-left: 12px; margin: 0.8em 0; color: var(--c-text-2); font-style: italic; }
+    .chat-msg--ai .chat-msg__bubble hr { border: none; border-top: 1px solid var(--c-border); margin: 1.2em 0; }
+    .chat-msg--ai .chat-msg__bubble h1, .chat-msg--ai .chat-msg__bubble h2, .chat-msg--ai .chat-msg__bubble h3, .chat-msg--ai .chat-msg__bubble h4, .chat-msg--ai .chat-msg__bubble h5, .chat-msg--ai .chat-msg__bubble h6 { margin: 0.8em 0 0.4em; font-weight: var(--fw-s); }
+    .chat-msg--ai .chat-msg__bubble h1 { font-size: 1.3em; }
+    .chat-msg--ai .chat-msg__bubble h2 { font-size: 1.2em; }
+    .chat-msg--ai .chat-msg__bubble h3 { font-size: 1.1em; }
     /* 聊天图片全屏查看器 */
     .img-lightbox {
       display: none; position: fixed; inset: 0; z-index: 300;
@@ -1681,14 +1690,33 @@
     <div class="modal-body">
       <input type="text" class="modal-input" id="renameInput" placeholder="输入文件名" />
       <p class="modal-hint">仅修改显示名称，不影响原始文件内容</p>
-      <label class="modal-field-label" for="expireInput">过期时间（可选）</label>
-      <input type="datetime-local" class="modal-input" id="expireInput" />
-      <p class="modal-hint">留空表示永久有效。过期文件将被排除在搜索之外。</p>
-      <label class="modal-field-label" for="ifShowInput" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px">
-        <input type="checkbox" id="ifShowInput" checked />
-        展示此文件中的图片
-      </label>
-      <p class="modal-hint">取消勾选：此文件的图片不会在搜索/聊天结果中展示（文字仍可检索）。</p>
+      <div id="renameMoreToggle" style="display:flex;align-items:center;gap:4px;cursor:pointer;margin-top:16px;color:var(--c-text-2);font-size:var(--fs-xs);user-select:none">
+        <svg id="renameMoreArrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .2s;transform:rotate(-90deg)"><polyline points="6 9 12 15 18 9"/></svg>
+        更多选项
+      </div>
+      <div id="renameMoreSection" style="display:none;margin-top:8px">
+        <label class="modal-field-label" for="expireInput">过期时间（可选）</label>
+        <input type="datetime-local" class="modal-input" id="expireInput" />
+        <p class="modal-hint">留空表示永久有效。过期文件将被排除在搜索之外。</p>
+        <label class="modal-field-label" for="ifShowInput" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:12px">
+          <input type="checkbox" id="ifShowInput" checked />
+          展示此文件中的图片
+        </label>
+        <p class="modal-hint">取消勾选：此文件的图片不会在搜索/聊天结果中展示（文字仍可检索）。</p>
+        <label class="modal-field-label">子块重写（指代消解）</label>
+        <div style="display:flex;gap:16px;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="rewriteMode" value="smart" checked /> 智能重写
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="rewriteMode" value="force" /> 强制重写
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
+            <input type="radio" name="rewriteMode" value="none" /> 关闭
+          </label>
+        </div>
+        <p class="modal-hint">智能重写：仅对含代词的子块重写，省 token。强制重写：所有子块都重写，效果最佳但消耗更多。关闭：跳过重写。</p>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn-secondary" id="renameCancel">取消</button>
@@ -2017,6 +2045,9 @@
     renameInput.value = file.name.replace(/\.[^.]+$/, '');
     expireInput.value = '';   // 默认空 = 永久有效
     ifShowInput.checked = true;  // 默认允许展示图片
+    document.querySelector('input[name="rewriteMode"][value="smart"]').checked = true;  // 默认智能重写
+    renameMoreSection.style.display = 'none';  // 默认收起"更多"
+    renameMoreArrow.style.transform = 'rotate(-90deg)';
     renameModal.style.display = 'flex';
   }
 
@@ -2026,6 +2057,13 @@
   const renameInput = document.getElementById('renameInput');
   const expireInput = document.getElementById('expireInput');
   const ifShowInput = document.getElementById('ifShowInput');
+  const renameMoreSection = document.getElementById('renameMoreSection');
+  const renameMoreArrow = document.getElementById('renameMoreArrow');
+  document.getElementById('renameMoreToggle').addEventListener('click', () => {
+    const expanded = renameMoreSection.style.display !== 'none';
+    renameMoreSection.style.display = expanded ? 'none' : 'block';
+    renameMoreArrow.style.transform = expanded ? 'rotate(-90deg)' : 'rotate(0deg)';
+  });
   document.getElementById('renameConfirm').addEventListener('click', async () => {
     if (!pendingFile) return;
     const file = pendingFile;
@@ -2049,6 +2087,8 @@
       formData.append('expire_time', expireVal);
     }
     formData.append('if_show', ifShowInput.checked);
+    const rewriteMode = document.querySelector('input[name="rewriteMode"]:checked');
+    formData.append('rewrite_mode', rewriteMode ? rewriteMode.value : 'smart');
 
     try {
       const res = await apiFetch('/chunk/upload', { method: 'POST', body: formData });
@@ -2847,7 +2887,7 @@
       saveOnlyBtn.style.display = 'inline-flex';
       saveRechunkBtn.style.display = 'inline-flex';
       toggleText.textContent = '预览';
-      titleEl.textContent = `Edit 解析结果 - ${_parsedName}`;
+      titleEl.textContent = `解析结果 - ${_parsedName}`;
       ta.focus();
     } else {
       // 切换到预览模式：隐藏编辑区，显示预览
@@ -2861,8 +2901,8 @@
     }
   }
 
-  function closeParsedEditor() {
-    if (_parsedDirty && !window.confirm('有未保存的修改，确定关闭？')) return;
+  async function closeParsedEditor() {
+    if (_parsedDirty && !await showConfirm('未保存的修改', '有未保存的修改，确定关闭？', '', '关闭')) return;
     document.getElementById('parsedOverlay').classList.remove('visible');
     document.getElementById('parsedPanel').classList.remove('visible');
     _parsedFile = null;
@@ -3180,10 +3220,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     d.dataset.text = o.text || '';
     d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="象象仔" />
       <div class="chat-msg__body">
-        <div class="chat-msg__header">
-          <span class="chat-msg__name">象象仔</span>
-          <span class="chat-msg__badge">深度思考</span>
-        </div>
         <div class="chat-msg__bubble">${html}</div>
         <div class="chat-msg__actions">
           <button type="button" class="chat-msg__act-btn act-copy" data-tip="复制回答" onclick="copyAnswer(this)" aria-label="复制回答">
@@ -3207,9 +3243,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const d = document.createElement('div'); d.className = 'chat-msg chat-msg--ai';
     d.innerHTML = `<img src="/front_end_assets/Avatar.svg" class="chat-msg__avatar" alt="象象仔" />
       <div class="chat-msg__body">
-        <div class="chat-msg__header">
-          <span class="chat-msg__name">象象仔</span>
-        </div>
         <div class="chat-msg__bubble" id="streamingContent">
           <span class="typing-indicator"><span></span><span></span><span></span></span>
         </div>
@@ -3817,6 +3850,40 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const streamingEl = createStreamingMsg();
     chatMessages.appendChild(streamingEl); scrollToBottom();
 
+    // ---- 等待小贴士轮播（在节点提示后用 | 分隔展示）----
+    let tipsList = [], tipIndex = 0, tipTimer = null, tipShowTimer = null, currentHint = '', currentTip = '';
+    function renderHint() {
+      const el = document.getElementById('streamingContent');
+      if (!el) return;
+      let html = `<span style="opacity:.85">${currentHint}`;
+      if (currentTip) html += ` <span style="opacity:.45;margin:0 4px">|</span> <span style="opacity:.65">${currentTip}</span>`;
+      html += ` <span class="typing-indicator"><span></span><span></span><span></span></span></span>`;
+      el.innerHTML = html;
+      scrollToBottom();
+    }
+    function startTips(tips, interval) {
+      tipsList = Array.isArray(tips) ? tips : [];
+      if (!tipsList.length) return;
+      // 3 秒后开始轮播小贴士，追加在节点提示后面
+      tipShowTimer = setTimeout(() => {
+        if (!isStreaming) return;
+        tipIndex = 0;
+        currentTip = tipsList[0];
+        renderHint();
+        tipTimer = setInterval(() => {
+          if (!isStreaming) return;
+          tipIndex = (tipIndex + 1) % tipsList.length;
+          currentTip = tipsList[tipIndex];
+          renderHint();
+        }, (interval || 4) * 1000);
+      }, 3000);
+    }
+    function stopTips() {
+      if (tipTimer) { clearInterval(tipTimer); tipTimer = null; }
+      if (tipShowTimer) { clearTimeout(tipShowTimer); tipShowTimer = null; }
+      currentTip = '';
+    }
+
     try {
       const res = await apiFetch('/chat/stream', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -3836,22 +3903,38 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
           try {
             const data = JSON.parse(line.slice(6));
             switch (data.type) {
-              case 'start': sessionId = data.session_id; turnCount = data.turn_count != null ? data.turn_count : null; Store.set('sessionId', sessionId); break;
-              case 'thinking': { const el = document.getElementById('streamingContent'); if (el) el.innerHTML = `<div style="opacity:.85">${data.hint || '思考中...'} <span class="typing-indicator"><span></span><span></span><span></span></span></div>`; scrollToBottom(); break; }
-              case 'tool_query': { const el = document.getElementById('streamingContent'); if (el) el.innerHTML = `<div style="opacity:.85">${data.hint || '搜索中...'} <span class="typing-indicator"><span></span><span></span><span></span></span></div>`; scrollToBottom(); break; }
-              case 'content': fullAnswer += data.content; updateStreamingContent(fullAnswer); scrollToBottom(); break;
+              case 'start':
+                sessionId = data.session_id; turnCount = data.turn_count != null ? data.turn_count : null; Store.set('sessionId', sessionId);
+                if (data.tips && data.tips.length) startTips(data.tips, data.tips_interval || 4);
+                break;
+              case 'thinking':
+                currentHint = data.hint || '思考中...';
+                renderHint();
+                break;
+              case 'tool_query':
+                currentHint = data.hint || '搜索中...';
+                renderHint();
+                break;
+              case 'content':
+                stopTips();
+                fullAnswer += data.content; updateStreamingContent(fullAnswer); scrollToBottom();
+                break;
               case 'done': relatedQuestions = data.related_questions || []; streamSources = data.sources || []; break;
-              case 'error': console.error('[Stream] Error:', data.error); break;
+              case 'error': console.error('[Stream] Error:', data.error); if (!fullAnswer) fullAnswer = '抱歉，系统暂时遇到问题，请稍后再试。'; break;
             }
           } catch(e) {}
         }
       }
+      stopTips();
       streamingEl.remove();
       // 剥离分隔符和追问部分，只保留正文
       const delimiter = '---RELATED---';
-      let cleanAnswer = fullAnswer || '（无响应）';
+      let cleanAnswer = fullAnswer || '';
       if (cleanAnswer.includes(delimiter)) {
-        cleanAnswer = cleanAnswer.substring(0, cleanAnswer.indexOf(delimiter)).trim() || '（无响应）';
+        cleanAnswer = cleanAnswer.substring(0, cleanAnswer.indexOf(delimiter)).trim();
+      }
+      if (!cleanAnswer) {
+        cleanAnswer = '抱歉，我暂时没有生成有效回答，请尝试换个问法或稍后再试。';
       }
       // 构建追问按钮 HTML；回答引用了图片素材时，追加"查看原图"提醒按钮
       const relatedHtml = buildRelatedHtml(relatedQuestions, streamSources);
@@ -3859,6 +3942,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
         turnCount, text: cleanAnswer
       })); scrollToBottom();
     } catch (err) {
+      stopTips();
       streamingEl.remove();
       chatMessages.appendChild(createAiMsg(`<p style="color:var(--c-rose)">请求失败，请重试。</p>`)); scrollToBottom();
     }

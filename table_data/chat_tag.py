@@ -19,6 +19,7 @@ from dotenv import load_dotenv, find_dotenv
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
+from calculate_logic.rag.token_usage import log_token_usage
 
 load_dotenv(find_dotenv())
 
@@ -59,7 +60,7 @@ def _get_tag_llm() -> ChatOpenAI:
             http_client=httpx.Client(verify=False, timeout=30),
             temperature=0.1,
         )
-        logger.info(f"[ChatTag] LLM 初始化: model={os.getenv('TEXT_MODEL', '')}")
+        logger.debug(f"[ChatTag] LLM 初始化: model={os.getenv('TEXT_MODEL', '')}")
     return _tag_llm
 
 # ================= 系统提示词 =================
@@ -127,6 +128,7 @@ async def _tag_one(msg_id: int, content: str) -> tuple[str, str]:
             ),
             timeout=15,
         )
+        log_token_usage("chat_tag", resp, os.getenv("TEXT_MODEL", ""))
         text = (resp.content or "").strip()
         # 解析 JSON
         m = re.search(r'\{[^}]+\}', text)

@@ -26,6 +26,7 @@ from typing import TypedDict, Annotated, Literal, Sequence, Optional
 import operator
 from dotenv import load_dotenv, find_dotenv
 from typesafe_sdk import TypeSafeClient, Noul, Choice
+from calculate_logic.rag.token_usage import log_token_usage
 
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
@@ -113,7 +114,7 @@ def get_jev_client():
     global _jev_client
     if _jev_client is None:
         _jev_client = TypeSafeClient()
-        logger.info("[Jev] TypeSafeClient 初始化完成")
+        logger.debug("[Jev] TypeSafeClient 初始化完成")
     return _jev_client
 
 # ================= Langgraph状态State =================
@@ -138,12 +139,45 @@ class ChatState(TypedDict):
 tools = [query_leave_quota, query_leave_record, query_working_time, query_personal_info]
 tool_node = ToolNode(tools) # ToolNode的作用是将工具封装成一个节点：解析“工具调用”输入 -> 调用对应工具 -> 将结果包装成ToolMessage返回
 
-TOOL_QUERY_HINTS = {   # 工具名 → 面向用户的「正在查询…」提示文案（仅前端展示用，不发给 LLM）。
+# ---- 前端等待提示：从 .env 读取，方便统一维护 ----
+_DEFAULT_TOOL_QUERY_HINTS = {
     "query_leave_quota": "正在查询您的假期额度",
     "query_leave_record": "正在查询您的请假记录",
     "query_working_time": "正在查询您的工时数据",
     "query_personal_info": "正在查询您的个人信息",
 }
+_DEFAULT_NODE_HINTS = {
+    "classify_turn_type": "正在理解您的问题",
+    "query_rewrite": "正在分析上下文",
+    "node_retrieve": "正在检索知识库",
+    "node_faq_match": "正在匹配常见问题",
+    "node_generate": "正在生成回答",
+    "tool_node": "正在调用工具",
+}
+_DEFAULT_WAITING_TIPS = [
+    "您可以尝试用更具体的描述来提问",
+    "支持上传图片提问哦",
+    "常见问题可以直接点击追问按钮",
+    "如果您的问题涉及多个方面，可以分步提问",
+    "我会记住我们的对话上下文，可以直接追问",
+    "假期、工时、个人信息等问题我可以直接查询",
+]
+
+def _load_json_env(key: str, default):
+    """从环境变量读取 JSON，解析失败时回退到默认值。"""
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except Exception:
+        logger.warning(f"[Config] {key} 解析失败，使用默认值")
+        return default
+
+TOOL_QUERY_HINTS = _load_json_env("TOOL_QUERY_HINTS", _DEFAULT_TOOL_QUERY_HINTS)
+NODE_HINTS = _load_json_env("NODE_HINTS", _DEFAULT_NODE_HINTS)
+WAITING_TIPS = _load_json_env("WAITING_TIPS", _DEFAULT_WAITING_TIPS)
+WAITING_TIPS_INTERVAL = int(os.getenv("WAITING_TIPS_INTERVAL", "4").strip() or "4")
 
 # ================= 多轮对话全局变量 =================
 followup_n = 1  # 判断是否为追问时，结合的历史对话轮数
@@ -186,15 +220,11 @@ def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  #
                 (uid, session_id, turn_count, ai_msg, mode, json.dumps(sources if sources else []), json.dumps(related_questions if related_questions else []), duration_ms, prompt_token, completion_token, total_token),
             )
             conn.commit()
-        logger.info(f"[PG] 已保存第{turn_count}轮对话: uid={uid} | session={session_id[:3]}... | mode={mode} | duration={duration_ms}ms | tokens={total_token}")
+        logger.info(f"[PG] 已保存第{turn_count}轮对话: uid={uid} | session={session_id[:3]}... | mode={mode} | duration={duration_ms}ms | model={config.get('TEXT_MODEL','')} | tokens={total_token}")
     except Exception as e:
         logger.error(f"[PG] 保存对话失败: {e}")
     
-# ================= 兜底提示文案（LLM 生成失败时使用）================= 
-_FALLBACK_ANSWERS = {
-    "中文": "抱歉，我暂时无法回答您的问题，请稍后再试。",
-    "英文": "Sorry, I'm unable to answer your question at the moment. Please try again later.",
-}
+# ================= 兜底提示文案（LLM 生成失败时使用，具体话术在文件后方从 .env 读取）=================
 
 # ================= 辅助函数 —— 检测用户提问语种 =================
 def _detect_language(text: str) -> str:
@@ -243,22 +273,27 @@ async def if_follow(state: ChatState) -> ChatState:
     # 优先用 Jev Noul 判断
     try:
         client = get_jev_client()
-        result = await asyncio.to_thread(
-            client.system_one,
-            state={
-                "history": history_text,
-                "current_message": last_message,
-            },
-            questions={
-                "is_followup": Noul(
-                    instructions="`current_message` 只有结合 `history` 才能理解完整含义？它使用了代词（它、这个、那、怎么做）、省略句（那怎么办？还有呢？），或承接前文的补充提问。寒暄/客套/告别（如OK、谢谢、再见）不算追问。",
-                ),
-            },
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.system_one,
+                state={
+                    "history": history_text,
+                    "current_message": last_message,
+                },
+                questions={
+                    "is_followup": Noul(
+                        instructions="`current_message` 只有结合 `history` 才能理解完整含义？它使用了代词（它、这个、那、怎么做）、省略句（那怎么办？还有呢？），或承接前文的补充提问。寒暄/客套/告别（如OK、谢谢、再见）不算追问。",
+                    ),
+                },
+            ),
+            timeout=15,
         )
         noul_val = result.nouls["is_followup"].noul
         is_followup = noul_val > 0.7
         logger.info(f"[ClassifyTurn] Jev noul={noul_val:.4f} -> {'followup' if is_followup else 'new'}")
         return {"is_followup": is_followup}
+    except asyncio.TimeoutError:
+        logger.warning(f"[ClassifyTurn] Jev 超时(15s)，降级为 LLM 判断")
     except Exception as e:
         logger.warning(f"[ClassifyTurn] Jev 不可用，降级为 LLM 判断: {e}")
 
@@ -296,6 +331,7 @@ async def if_follow(state: ChatState) -> ChatState:
             extra_body={"enable_thinking": False, "max_tokens": 10},
             config={"tags": ["classify_turn_type"]}
         )
+        log_token_usage("classify_turn", response, config.get("FAST_MODEL", ""))
         decision = response.content.strip().lower()
     except Exception as e:
         logger.error(f"[ClassifyTurn] LLM 兜底也失败，退化为全新问题: {e}")
@@ -306,78 +342,89 @@ async def if_follow(state: ChatState) -> ChatState:
 
 # ================= 查询重写/指代消解 =================
 async def query_rewrite(state: ChatState) -> ChatState:
-    last_message = state["messages"][-1].content if state["messages"] else ""
-    history_messages = _clean_history_messages(state["messages"])[-(rewrite_n * 2 + 1):-1]
-    history_text = "\n".join(history_messages)
-    previous_query = state.get("query", "")
-
-    logger.info(f"[QueryRewrite] 用户: {last_message[:50] if last_message else '(empty)'}...")
-    
-    is_followup = state.get("is_followup", False)
-    if not is_followup:      # 全新问题，无需改写
-        logger.info(f"[QueryRewrite] 全新问题，无需改写")
-        return {"query": last_message}
-    
-    rewrite_prompt = f"""你是一个查询改写专家，负责将用户的追问改写成完整的、无歧义的检索query。
-
-    【任务说明】
-    改写【当前问题】，需要结合【历史对话】将其还原为完整的、可独立检索的问题，并聚焦于【前一个提问】、继承关键信息，避免遗漏。
-
-    【历史对话】
-    {history_text if history_text else "（无历史对话）"}
-
-    【当前问题】
-    {last_message}
-
-    【前一个提问】
-    {previous_query if previous_query else " (无前序问题) "}
-
-    【改写要求】
-    1. **继承关键信息**：从【前一个提问】中提取所有关键术语、概念、实体、专有名词，确保不遗漏、不误读
-        - 核心词（如政策类型、产品名、流程名等）必须原样保留，不得用近义词替换或泛化
-        - 不要用更宽泛或更狭窄的词替换核心概念
-    2. **指代消解**：将代词（这、那、它、这个、怎么办等）替换为历史对话中对应的具体内容
-    3. **补充省略**：将不完整的句子补充为完整问题
-    4. **独立可检索**：改写后的问题必须能独立理解，不依赖历史对话
-
-    【示例】
-    历史: 用户：年假过期后可以顺延吗？ 助手：过期后未使用的年假作废，无法顺延。
-    当前: 那加班费怎么算？
-    改写: 年假过期后加班费怎么计算？
-
-    历史: 用户：我想请3天假 助手：请说明请假类型和日期
-    当前: 事假需要提供证明吗？
-    改写: 事假申请需要提供证明材料吗？
-
-    历史：用户：我想购买MINI车，如何参加员工购车计划？助手：根据2026年MINI员工购车项目政策...
-    当前追问：提交方式有哪些？
-    改写：员工参加购车计划购买MINI车，提交方式有哪些？
-    （注：继承提问中的MINI，确保不遗漏关键信息）
-
-    历史: 无历史对话
-    当前: 请问年假有多少天？
-    改写: 请问年假有多少天？
-
-    请直接返回改写后的query，不要任何解释或其他内容。"""
-
-    llm_client = get_fast_llm_client()
+    last_message = state["messages"][-1].content if state.get("messages") else ""
     try:
-        response = await llm_client.ainvoke(
-            [HumanMessage(content=rewrite_prompt)],
-            extra_body={"enable_thinking": False, "max_tokens": 100},
-            config={"tags": ["query_rewrite"]}
-        )
-        rewritten_query = response.content.strip()
+        history_messages = _clean_history_messages(state.get("messages", []))[-(rewrite_n * 2 + 1):-1]
+        history_text = "\n".join(history_messages)
+        previous_query = state.get("query", "")
+
+        logger.info(f"[QueryRewrite] 用户: {last_message[:50] if last_message else '(empty)'}...")
+
+        is_followup = state.get("is_followup", False)
+        if not is_followup:
+            logger.info(f"[QueryRewrite] 全新问题，无需改写")
+            return {"query": last_message}
+
+        rewrite_prompt = f"""你是一个查询改写专家，负责将用户的追问改写成完整的、无歧义的检索query。
+
+        【任务说明】
+        改写【当前问题】，需要结合【历史对话】将其还原为完整的、可独立检索的问题，并聚焦于【前一个提问】、继承关键信息，避免遗漏。
+
+        【历史对话】
+        {history_text if history_text else "（无历史对话）"}
+
+        【当前问题】
+        {last_message}
+
+        【前一个提问】
+        {previous_query if previous_query else " (无前序问题) "}
+
+        【改写要求】
+        1. **继承关键信息**：从【前一个提问】中提取所有关键术语、概念、实体、专有名词，确保不遗漏、不误读
+            - 核心词（如政策类型、产品名、流程名等）必须原样保留，不得用近义词替换或泛化
+            - 不要用更宽泛或更狭窄的词替换核心概念
+        2. **指代消解**：将代词（这、那、它、这个、怎么办等）替换为历史对话中对应的具体内容
+        3. **补充省略**：将不完整的句子补充为完整问题
+        4. **独立可检索**：改写后的问题必须能独立理解，不依赖历史对话
+
+        【示例】
+        历史: 用户：年假过期后可以顺延吗？ 助手：过期后未使用的年假作废，无法顺延。
+        当前: 那加班费怎么算？
+        改写: 年假过期后加班费怎么计算？
+
+        历史: 用户：我想请3天假 助手：请说明请假类型和日期
+        当前: 事假需要提供证明吗？
+        改写: 事假申请需要提供证明材料吗？
+
+        历史：用户：我想购买MINI车，如何参加员工购车计划？助手：根据2026年MINI员工购车项目政策...
+        当前追问：提交方式有哪些？
+        改写：员工参加购车计划购买MINI车，提交方式有哪些？
+        （注：继承提问中的MINI，确保不遗漏关键信息）
+
+        历史: 无历史对话
+        当前: 请问年假有多少天？
+        改写: 请问年假有多少天？
+
+        请直接返回改写后的query，不要任何解释或其他内容。"""
+
+        llm_client = get_fast_llm_client()
+        try:
+            response = await llm_client.ainvoke(
+                [HumanMessage(content=rewrite_prompt)],
+                extra_body={"enable_thinking": False, "max_tokens": 100},
+                config={"tags": ["query_rewrite"]}
+            )
+            log_token_usage("query_rewrite", response, config.get("FAST_MODEL", ""))
+            rewritten_query = response.content.strip()
+        except Exception as e:
+            logger.error(f"[QueryRewrite] LLM 查询重写失败，回退原始 query: {e}")
+            rewritten_query = last_message
+        logger.info(f"[QueryRewrite] 改写结果: {rewritten_query}")
+        return {"query": rewritten_query}
     except Exception as e:
-        logger.error(f"[QueryRewrite] LLM 查询重写失败，回退原始 query: {e}")
-        rewritten_query = last_message
-    logger.info(f"[QueryRewrite] 改写结果: {rewritten_query}")    
-    return {"query": rewritten_query}
+        logger.error(f"[QueryRewrite] 节点异常，回退原始 query: {e}")
+        return {"query": last_message}
 
 # ================= 敏感话题检测（Jev Noul，LLM 兜底，与主线并行） =================
 # 命中敏感话题时不走 RAG 链路，而是走独立固定话术分支（mode=sensitive）。
 SENSITIVE_REPLY = os.getenv("SENSITIVE_REPLY", "抱歉，我无法回答这个问题。").strip()
 SENSITIVE_TOPICS = os.getenv("SENSITIVE_TOPICS", "").strip()
+
+# ================= 兜底话术（从 .env 读取，方便统一修改） =================
+FALLBACK_LLM_ERROR = os.getenv("FALLBACK_LLM_ERROR", "抱歉，我暂时无法回答您的问题，请稍后再试。").strip()
+FALLBACK_SYSTEM_ERROR = os.getenv("FALLBACK_SYSTEM_ERROR", "抱歉，系统暂时遇到问题，请稍后再试。").strip()
+FALLBACK_TIMEOUT = os.getenv("FALLBACK_TIMEOUT", "抱歉，系统响应超时，请稍后再试。").strip()
+FALLBACK_EMPTY_RESPONSE = os.getenv("FALLBACK_EMPTY_RESPONSE", "抱歉，我暂时没有生成有效回答，请尝试换个问法或稍后再试。").strip()
 async def _judge_sensitive(query: str) -> str:
     if not query or not query.strip():
         return "miss"
@@ -385,22 +432,27 @@ async def _judge_sensitive(query: str) -> str:
     # 优先用 Jev Noul 判断
     try:
         client = get_jev_client()
-        result = await asyncio.to_thread(
-            client.system_one,
-            state={
-                "user_query": query,
-                "sensitive_topics": SENSITIVE_TOPICS,
-            },
-            questions={
-                "is_sensitive": Noul(
-                    instructions="`user_query` 涉及 `sensitive_topics` 中的话题，或政治敏感、赌博、毒品药物、色情、暴力恐怖、诈骗、违法活动、侵犯他人隐私、黑客攻击等违规内容？除非严格命中，否则视为安全。",
-                ),
-            },
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.system_one,
+                state={
+                    "user_query": query,
+                    "sensitive_topics": SENSITIVE_TOPICS,
+                },
+                questions={
+                    "is_sensitive": Noul(
+                        instructions="`user_query` 涉及 `sensitive_topics` 中的话题，或政治敏感、赌博、毒品药物、色情、暴力恐怖、诈骗、违法活动、侵犯他人隐私、黑客攻击等违规内容？除非严格命中，否则视为安全。",
+                    ),
+                },
+            ),
+            timeout=15,
         )
         noul_val = result.nouls["is_sensitive"].noul
         hit = noul_val > 0.7
         logger.info(f"[Sensitive] Jev noul={noul_val:.4f} query='{query[:50]}' -> {'hit' if hit else 'miss'}")
         return "hit" if hit else "miss"
+    except asyncio.TimeoutError:
+        logger.warning(f"[Sensitive] Jev 超时(15s)，降级为 LLM 判断")
     except Exception as e:
         logger.warning(f"[Sensitive] Jev 不可用，降级为 LLM 判断: {e}")
 
@@ -431,6 +483,7 @@ async def _judge_sensitive(query: str) -> str:
             ),
             timeout=10,
         )
+        log_token_usage("sensitive_judge", response, config.get("FAST_MODEL", ""))
         text = (response.content or "").strip().lower()
         logger.info(f"[Sensitive] LLM兜底 query='{query[:50]}' -> {text}")
         return "hit" if '"hit"' in text or "'hit'" in text else "miss"
@@ -487,18 +540,21 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
     try:
         client = get_jev_client()
         criteria = {s["id"]: f"{s['name']}：{s['trigger']}" for s in scenes}
-        result = await asyncio.to_thread(
-            client.system_one,
-            state={"user_query": query},
-            questions={
-                "scene_hit": Choice(
-                    instructions="`user_query` 命中以下哪个预设场景？",
-                    criteria=criteria,
-                ),
-                "has_match": Noul(
-                    instructions="`user_query` 明确命中某个预设场景的触发条件？如果只是泛泛提问或闲聊，未命中任何场景。",
-                ),
-            },
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.system_one,
+                state={"user_query": query},
+                questions={
+                    "scene_hit": Choice(
+                        instructions="`user_query` 命中以下哪个预设场景？",
+                        criteria=criteria,
+                    ),
+                    "has_match": Noul(
+                        instructions="`user_query` 明确命中某个预设场景的触发条件？如果只是泛泛提问或闲聊，未命中任何场景。",
+                    ),
+                },
+            ),
+            timeout=15,
         )
         has_match = result.nouls["has_match"].noul > 0.7
         if has_match:
@@ -508,6 +564,8 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
                 return hit_id
         logger.info(f"[SceneJudge] Jev 未命中 has_match={result.nouls['has_match'].noul:.4f} query='{query[:50]}'")
         return ""
+    except asyncio.TimeoutError:
+        logger.warning(f"[SceneJudge] Jev 超时(15s)，降级为 LLM 判断")
     except Exception as e:
         logger.warning(f"[SceneJudge] Jev 不可用，降级为 LLM 判断: {e}")
 
@@ -536,6 +594,7 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
             ),
             timeout=10,
         )
+        log_token_usage("scene_judge", response, config.get("FAST_MODEL", ""))
         text = (response.content or "").strip().lower()
         logger.info(f"[SceneJudge] LLM兜底 query='{query[:50]}' -> {text}")
         import re as _re
@@ -601,7 +660,7 @@ def _get_faq_bm25() -> tuple[list[str], list[str], BM25Plus]:
     if not _faq_cache["questions"] or _faq_cache["bm25"] is None:
         qs, ans, bm25 = _load_faq()
         _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-        logger.info(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
+        logger.debug(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
     return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
 
 _faq_load_lock: "asyncio.Lock | None" = None  # 跨并发抢建索引的进程内互斥锁（异步上下文使用）
@@ -619,7 +678,7 @@ async def _aget_faq_bm25() -> tuple[list[str], list[str], BM25Plus]:
             return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
         qs, ans, bm25 = await asyncio.to_thread(_load_faq)
         _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-        logger.info(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
+        logger.debug(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
     return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
 
 def preload_faq_index() -> None:
@@ -632,45 +691,49 @@ def preload_faq_index() -> None:
         return
     qs, ans, bm25 = _load_faq()
     _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-    logger.info(f"[FaqMatch] 启动预热完成：{len(qs)} 条FAQ，IDF来自kb语料")
+    logger.debug(f"[FaqMatch] 启动预热完成：{len(qs)} 条FAQ，IDF来自kb语料")
 
 async def node_faq_match(state: ChatState) -> ChatState:
     query = state["messages"][-1].content if state["messages"] else ""
     if not query or not query.strip():
         return {"mode": state.get("mode", "rag")}
 
-    questions, answers, bm25 = await _aget_faq_bm25()
-    if not questions or bm25 is None:
+    try:
+        questions, answers, bm25 = await _aget_faq_bm25()
+        if not questions or bm25 is None:
+            return {"mode": state.get("mode", "rag")}
+
+        tokens = [t for t in jieba.cut(query) if t.strip()]
+        scores = bm25.get_scores(tokens)
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        top1_idx, top1_score = ranked[0]
+        top2_score = ranked[1][1] if len(ranked) > 1 else 0.0
+
+        # 绝对相关度：查询的不重复词中，多大比例（按 IDF 加权）命中了 TOP1 文档
+        unique_tokens = set(tokens)
+        total_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens)
+        hit_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens
+                         if bm25.doc_freqs[top1_idx].get(t, 0) > 0)
+        coverage = hit_weight / total_weight if total_weight > 0 else 0.0
+
+        # 相对区分度：TOP1 在 TOP1+TOP2 中的占比，[0.5, 1]
+        ratio = top1_score / (top1_score + top2_score) if (top1_score + top2_score) > 0 else 1.0
+        logger.info(f"[FaqMatch] query='{query[:50]}' TOP1={top1_score:.4f} coverage={coverage:.4f} ratio={ratio:.4f}")
+
+        if coverage >= FAQ_COVERAGE_THRESHOLD and ratio >= FAQ_RATIO_THRESHOLD:
+            answer = answers[top1_idx]
+            logger.info(f"[FaqMatch] 命中FAQ：Q='{questions[top1_idx][:50]}'")
+            return {
+                "mode": "faq",
+                "final_answer": answer,
+                "messages": [AIMessage(content=answer)],
+            }
+
+        logger.info(f"[FaqMatch] 未达阈值（coverage={coverage:.4f}<{FAQ_COVERAGE_THRESHOLD} 或 ratio={ratio:.4f}<{FAQ_RATIO_THRESHOLD}），走正常RAG")
         return {"mode": state.get("mode", "rag")}
-
-    tokens = [t for t in jieba.cut(query) if t.strip()]
-    scores = bm25.get_scores(tokens)
-    ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-    top1_idx, top1_score = ranked[0]
-    top2_score = ranked[1][1] if len(ranked) > 1 else 0.0
-
-    # 绝对相关度：查询的不重复词中，多大比例（按 IDF 加权）命中了 TOP1 文档
-    unique_tokens = set(tokens)
-    total_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens)
-    hit_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens
-                     if bm25.doc_freqs[top1_idx].get(t, 0) > 0)
-    coverage = hit_weight / total_weight if total_weight > 0 else 0.0
-
-    # 相对区分度：TOP1 在 TOP1+TOP2 中的占比，[0.5, 1]
-    ratio = top1_score / (top1_score + top2_score) if (top1_score + top2_score) > 0 else 1.0
-    logger.info(f"[FaqMatch] query='{query[:50]}' TOP1={top1_score:.4f} coverage={coverage:.4f} ratio={ratio:.4f}")
-
-    if coverage >= FAQ_COVERAGE_THRESHOLD and ratio >= FAQ_RATIO_THRESHOLD:
-        answer = answers[top1_idx]
-        logger.info(f"[FaqMatch] 命中FAQ：Q='{questions[top1_idx][:50]}'")
-        return {
-            "mode": "faq",
-            "final_answer": answer,
-            "messages": [AIMessage(content=answer)],
-        }
-
-    logger.info(f"[FaqMatch] 未达阈值（coverage={coverage:.4f}<{FAQ_COVERAGE_THRESHOLD} 或 ratio={ratio:.4f}<{FAQ_RATIO_THRESHOLD}），走正常RAG")
-    return {"mode": state.get("mode", "rag")}
+    except Exception as e:
+        logger.error(f"[FaqMatch] 异常，降级走RAG: {e}")
+        return {"mode": state.get("mode", "rag")}
 
 
 # ================= RAG节点 —— 检索知识库chunk =================
@@ -906,11 +969,20 @@ async def node_generate(state: ChatState):
             acc = chunk if acc is None else acc + chunk
     except Exception as e:
         logger.error(f"[NodeGenerate] LLM 生成失败: {e}")
-        fallback = "抱歉，我暂时无法回答您的问题，请稍后再试。"
         return {
             "mode": "rag",
-            "final_answer": fallback,
-            "messages": [AIMessage(content=fallback)],
+            "final_answer": FALLBACK_LLM_ERROR,
+            "messages": [AIMessage(content=FALLBACK_LLM_ERROR)],
+            "sources": sources,
+        }
+
+    # 兜底：astream 无任何输出（acc=None）或输出为空
+    if acc is None or not (acc.content or "").strip():
+        logger.warning("[NodeGenerate] LLM 返回空内容，使用兜底文案")
+        return {
+            "mode": "rag",
+            "final_answer": FALLBACK_LLM_ERROR,
+            "messages": [AIMessage(content=FALLBACK_LLM_ERROR)],
             "sources": sources,
         }
 
@@ -1030,13 +1102,12 @@ checkpointer = _AsyncPostgresSaverAdapter(conn=_checkpointer_pool)
 try:
     _checkpointer_pool.open(wait=True)
     checkpointer.setup()        # 幂等：建表 IF NOT EXISTS
-    logger.info("[Checkpoint] PG checkpointer 已就绪")
+    logger.debug("[Checkpoint] PG checkpointer 已就绪")
 except Exception as _ckpt_err:
     # checkpoint 初始化失败不应阻断服务启动（对话仍可走PG历史持久化兜底）
     logger.error(f"[Checkpoint] PG checkpointer 初始化失败: {_ckpt_err}")
-
 graph = builder.compile(checkpointer=checkpointer)
-logger.info("[LangGraph] 图编译完成")
+logger.debug("[LangGraph] 图编译完成")
 
 def close_checkpointer() -> None:  # 关闭 checkpoint 连接池。供应用关闭时调用
     try:
@@ -1151,9 +1222,14 @@ async def chat_stream(
     async def stream_response():
         try:
             start_time = datetime.now(timezone.utc)
-            yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'turn_count': turn_count})}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'turn_count': turn_count, 'tips': WAITING_TIPS, 'tips_interval': WAITING_TIPS_INTERVAL})}\n\n"
             # 判定阶段先发 thinking 提示，避免 start 后到主图启动间出现无反馈空窗
-            yield f"data: {json.dumps({'type': 'thinking', 'hint': '收到您的问题'})}\n\n"
+            yield f"data: {json.dumps({'type': 'thinking', 'hint': NODE_HINTS.get('classify_turn_type', '收到您的问题')})}\n\n"
+
+            # ── 首轮并行生成 session 标题（与主图/敏感判定同时进行，不阻塞回答流）──
+            title_task = None
+            if is_new_session and turn_count == 1 and message:
+                title_task = asyncio.create_task(_generate_session_title(message))
 
             # 联运行时共享的统计结果（由主图循环写入，命中敏感时由本函数覆盖）
             ctx = {
@@ -1201,11 +1277,11 @@ async def chat_stream(
                         event_type = event.get("event", "")
                         tags = event.get("tags", [])
 
-                        # 查询重写/检索节点开始时，通知前端显示"正在思考中"
+                        # 各节点开始时，通知前端显示对应提示文案
                         if event_type == "on_chain_start":
                             node_name = event.get("name", "")
-                            if node_name in ["query_rewrite", "node_retrieve"]:
-                                await q.put(f"data: {json.dumps({'type': 'thinking', 'hint': '正在思考中'})}\n\n")
+                            if node_name in NODE_HINTS:
+                                await q.put(f"data: {json.dumps({'type': 'thinking', 'hint': NODE_HINTS[node_name]})}\n\n")
 
                         # LLM 流式输出
                         if event_type == "on_chat_model_stream":
@@ -1250,6 +1326,13 @@ async def chat_stream(
                                         ctx["prompt_tokens"] = um.get("input_tokens")
                                         ctx["completion_tokens"] = um.get("output_tokens")
                                         ctx["total_tokens"] = um.get("total_tokens")
+                                    _model = (getattr(last_msg, "response_metadata", None) or {}).get("model_name") or \
+                                             (getattr(last_msg, "response_metadata", None) or {}).get("model") or \
+                                             config.get("TEXT_MODEL", "")
+                                    logger.info(
+                                        f"[node_generate] model={_model} "
+                                        f"prompt={ctx['prompt_tokens']} completion={ctx['completion_tokens']} total={ctx['total_tokens']}"
+                                    )
                                     # 解析相关追问（场景命中时放宽上限，容纳场景额外追问）
                                     max_q = 6 if ctx.get("scene_id") else 3
                                     clean_answer, related_questions = _parse_related_questions(ctx["full_answer"], max_count=max_q)
@@ -1282,7 +1365,10 @@ async def chat_stream(
                 except Exception as e:
                     logger.error(f"[Stream] 主图事件循环异常: {str(e)}")
                     try:
-                        await q.put(f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n")
+                        if not ctx["full_answer"]:
+                            ctx["full_answer"] = FALLBACK_SYSTEM_ERROR
+                            await q.put(f"data: {json.dumps({'type': 'content', 'content': ctx['full_answer']})}\n\n")
+                        await q.put(f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n")
                     except Exception:
                         pass
                     await q.put(QUEUE_END)
@@ -1315,14 +1401,21 @@ async def chat_stream(
                     logger.info(f"[SceneJudge] 命中场景: {scene_id}")
 
             # ── 主图事件循环 + 并行消费（敏感命中则跳过主图）──
+            GRAPH_TIMEOUT = 60  # 整个主图执行超时上限（秒），防止 LLM/API 挂死导致前端永远空转
             main_task = asyncio.create_task(run_main()) if not hit else None
             if not hit:
                 # 正常流程：消费主图事件队列
                 get_task = asyncio.create_task(q.get())
                 pendings = {get_task} | ({main_task} if main_task else set())
+                timed_out = False
                 try:
                     while True:
-                        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
+                        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED, timeout=GRAPH_TIMEOUT)
+                        if not done:
+                            # 超时：没有任何事件到达，强制中断
+                            logger.error(f"[Stream] 主图执行超时（{GRAPH_TIMEOUT}s），强制中断")
+                            timed_out = True
+                            break
                         if get_task in done:
                             item = get_task.result()
                             if item is QUEUE_END:
@@ -1339,6 +1432,12 @@ async def chat_stream(
                             await main_task
                         except (asyncio.CancelledError, Exception):
                             pass
+                # 超时兜底：给前端发 fallback + done，避免前端永远空转
+                if timed_out:
+                    if not ctx["full_answer"]:
+                        ctx["full_answer"] = FALLBACK_TIMEOUT
+                        yield f"data: {json.dumps({'type': 'content', 'content': ctx['full_answer']})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
             else:
                 # 敏感命中：取消未完成的判定任务，不进入主图事件循环
                 if not scene_task.done():
@@ -1358,13 +1457,20 @@ async def chat_stream(
                 yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
                 _persist_turn(ctx)
 
+            # ── 兜底：主图/敏感/超时都未产出内容时，补发空响应提示 ──
+            if not ctx["full_answer"]:
+                ctx["full_answer"] = FALLBACK_EMPTY_RESPONSE
+                yield f"data: {json.dumps({'type': 'content', 'content': FALLBACK_EMPTY_RESPONSE})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                logger.warning(f"[Stream] 流结束时 full_answer 仍为空，补发 FALLBACK_EMPTY_RESPONSE")
+
             # 兜底：正常路径下若主图完成点已落库则不重复写；异常中断时补写
             _persist_turn(ctx)
 
-            # ── 首轮自动生成标题（只生成一次）──
-            if is_new_session and turn_count == 1 and message:
+            # ── 首轮自动生成标题：等待并行启动的标题任务完成 ──
+            if title_task is not None:
                 try:
-                    title = await _generate_session_title(message)
+                    title = await title_task
                     with _pg_conn() as conn:
                         conn.execute(
                             f"UPDATE {SESSIONS_TABLE} SET title = %s "
@@ -1378,7 +1484,8 @@ async def chat_stream(
 
         except Exception as e:
             logger.error(f"[ChatStream] 流式输出异常: {str(e)}")
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'content', 'content': FALLBACK_SYSTEM_ERROR})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream")
 
@@ -1529,6 +1636,7 @@ async def _generate_session_title(user_message: str) -> str:
             SystemMessage(content="你是标题生成器。请为用户的提问生成一个10字以内的中文标题，只输出标题文字，不要加引号、标点或换行。"),
             HumanMessage(content=user_message),
         ])
+        log_token_usage("session_title", resp, config.get("FAST_MODEL", ""))
         title = resp.content.strip().replace("\n", "").replace("\"", "").replace("'", "")[:10]
         return title if title else user_message[:10]
     except Exception as e:

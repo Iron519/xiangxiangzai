@@ -3,6 +3,10 @@ from pydantic import BaseModel, Field
 from typing import Any, Callable, Optional, Sequence, Literal
 import requests
 import urllib3
+import os
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+_TOOL_ERROR = os.getenv("FALLBACK_TOOL_ERROR", "相关查询暂时不可用，请稍后再试。").strip()
 # 抑制SSL警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -45,7 +49,7 @@ def fetch_leave_quotas(input_parameters: QueryLeaveQuota):
 
     except requests.exceptions.RequestException as e:
         print(f"请求失败: {e}")
-        return None
+        return _TOOL_ERROR
 
 @tool
 def query_leave_quota(input_parameters: QueryLeaveQuota) -> dict:

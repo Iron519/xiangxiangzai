@@ -21,6 +21,7 @@ from calculate_logic.chunk_pipeline.chunk import (
 from calculate_logic.chunk_pipeline.embedding import EmbeddingModel, store_semantic_chunks
 from calculate_logic.chunk_pipeline.rewrite import rewrite_chunks_with_coref
 from calculate_logic.fetch_knowledge.parse_file import DocumentParser, PARSE_RESULT_DIR
+from calculate_logic.rag.retrieval_rerank import invalidate_kb_bm25
 from sso_did.auth import TokenData, get_current_user, get_current_user_sse
 
 
@@ -198,22 +199,13 @@ def _check_cancelled(task_id: str) -> None:
 
 
 def _cleanup_task_artifacts(save_path: str, uid: str = "") -> dict:
-    """清理任务相关文件：删除上传的原文件和解析产物目录。
+    """清理任务相关文件：仅删除解析产物目录，保留原文件（幂等，避免误删同名文件）。
 
-    返回 {"file_removed": bool, "parse_removed": bool}。
+    原文件由 /kb/file/{file_name} 删除接口统一管理。
+
+    返回 {"parse_removed": bool}。
     """
-    result = {"file_removed": False, "parse_removed": False}
-    # 1. 删除上传的原文件
-    if save_path:
-        try:
-            p = Path(save_path)
-            if p.is_file():
-                p.unlink()
-                result["file_removed"] = True
-                logger.info(f"[Cleanup] 已删除上传文件: {save_path}")
-        except Exception as e:
-            logger.warning(f"[Cleanup] 删除上传文件失败 {save_path}: {e}")
-    # 2. 删除解析产物目录 parse_result/{uid}/{file_stem}/
+    result = {"parse_removed": False}
     if save_path:
         try:
             stem = Path(save_path).stem.replace(" ", "_")
@@ -312,7 +304,8 @@ async def _trigger_next_queued(uid: str) -> None:
 
 async def _background_process(task_id: str, save_path: str, original_name: str, uid: str = "anonymous",
                               expire_time: Optional[str] = None,
-                              if_show: bool = True) -> None:
+                              if_show: bool = True,
+                              rewrite_mode: str = "smart") -> None:
     """后台协程：解析 → [解析完成] → 切块 → 向量化 → 入库 → [注入完成]。
 
     两阶段进度：
@@ -369,7 +362,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             embedding_model = EmbeddingModel()
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
-            await rewrite_chunks_with_coref(semantic_chunks)
+            await rewrite_chunks_with_coref(semantic_chunks, rewrite_mode=rewrite_mode)
             _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
             for sc in semantic_chunks:
                 sc.file_size = _file_size
@@ -401,6 +394,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
                 },
             )
             logger.info(f"[Task {task_id}] 注入完成！共 {summary.get('chunk_count', 0)} 个切片")
+            invalidate_kb_bm25()
     except TaskCancelled:
         logger.info(f"[Task {task_id}] 任务已被中止: {original_name}")
         _cleanup_task_artifacts(save_path, uid)
@@ -420,7 +414,8 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
 
 
 async def _background_rechunk(task_id: str, file_name: str, save_path: str,
-                              original_name: str, uid: str = "anonymous", if_show: bool = True) -> None:
+                              original_name: str, uid: str = "anonymous", if_show: bool = True,
+                              rewrite_mode: str = "smart") -> None:
     """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。"""
     embedding_model = None
     try:
@@ -451,7 +446,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             embedding_model = EmbeddingModel()
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
-            await rewrite_chunks_with_coref(semantic_chunks)
+            await rewrite_chunks_with_coref(semantic_chunks, rewrite_mode=rewrite_mode)
             _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
             for sc in semantic_chunks:
                 sc.file_size = _file_size
@@ -489,6 +484,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                 },
             )
             logger.info(f"[Rechunk] 重切片完成 {original_name}: {summary.get('chunk_count', 0)} 切片")
+            invalidate_kb_bm25()
     except TaskCancelled:
         logger.info(f"[Rechunk] 任务 {task_id} 被中止")
     except Exception as e:
@@ -511,6 +507,7 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"
 @router.post("/chunk/upload")
 async def upload_file(file: UploadFile = File(...), display_name: str = Form(None),
                       expire_time: str = Form(None), if_show: bool = Form(False),
+                      rewrite_mode: str = Form("smart"),
                       overwrite: bool = Form(False),
                       current_user: TokenData = Depends(get_current_user)):
     """上传知识库文件，保存后立即返回 task_id，后台异步执行解析入库流程。
@@ -522,6 +519,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     expire_time: 可选，文件过期时间（ISO 8601 字符串，如 "2026-12-31T23:59"）。
                  不传或为空则视为永久有效。检索时自动过滤已过期文件。
     if_show: 该文件内含的图片是否允许在检索结果/聊天中展示。False 时不展示图片，文字仍正常检索。
+    rewrite_mode: 子块重写模式。"smart"=智能重写（仅含代词的子块），"force"=强制重写（所有子块），"none"=关闭。
     overwrite: 若 upload_kb/{uid}/ 下已有同名文件，是否直接覆盖。False 时返回 409 让前端确认。
     """
     uid = current_user.uid  # 已登录用户的真实账号
@@ -585,7 +583,8 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
 
     # 立即启动后台异步处理，信号量控制并发上限
     asyncio.create_task(_background_process(task_id, save_path, original_name, uid=uid,
-                                            expire_time=expire_iso, if_show=if_show))
+                                            expire_time=expire_iso, if_show=if_show,
+                                            rewrite_mode=rewrite_mode))
 
     return JSONResponse(content={
         "success": True,
@@ -941,6 +940,8 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
                         logger.warning(f"[KBFileDelete] 删除磁盘文件失败: {file_name}: {e}")
 
         logger.info(f"[KBFileDelete] 删除: {file_name} | 切片 {deleted_chunks} | 任务 {deleted_tasks} | parse_result {'已删' if parse_result_removed else '无/失败'} | upload_kb 保留")
+        if deleted_chunks > 0:
+            invalidate_kb_bm25()
         return JSONResponse(content={
             "success": True,
             "deleted_chunks": deleted_chunks,
@@ -1055,12 +1056,12 @@ async def kb_task_cancel(task_id: str, current_user: TokenData = Depends(get_cur
                     conn.commit()
                     logger.info(f"[KBTaskCancel] 任务已中止并删除记录: {task_id} (原状态 {status})")
                     cleanup = _cleanup_task_artifacts(save_path, task_uid)
-                    logger.info(f"[KBTaskCancel] 已清理文件和解析产物: {task_id} cleanup={cleanup}")
+                    logger.info(f"[KBTaskCancel] 已清理解析产物: {task_id} cleanup={cleanup}")
                     return JSONResponse(content={
                         "success": True,
                         "action": "cancelled",
                         "task_id": task_id,
-                        "note": "已中止并清理文件",
+                        "note": "已中止并清理解析产物",
                         **cleanup,
                     })
 
@@ -1190,7 +1191,8 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
 
     asyncio.create_task(_background_rechunk(task_id, row["file_name"], row["file_path"],
                                             row["original_name"], uid=uid,
-                                            if_show=row.get("if_show", True)))
+                                            if_show=row.get("if_show", True),
+                                            rewrite_mode="smart"))
     return JSONResponse(content={"success": True, "task_id": task_id,
                                  "original_name": row["original_name"],
                                  "message": "已开始重新切片入库"})
