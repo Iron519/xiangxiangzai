@@ -104,8 +104,8 @@ class MinerUProcessor:
         uid: str = "",
     ):
         self.pdf_path = str(pdf_path)
-        # 优先用 display_name 做产物目录名，保持可读性；空格替换为下划线
-        _name_stem = Path(display_name).stem if display_name else Path(self.pdf_path).stem
+        # 用 pdf_path（save_name）做产物目录名，与 upload_kb 和 PG file_name 一致
+        _name_stem = Path(self.pdf_path).stem
         self.file_stem = _name_stem.replace(" ", "_")
         self.output_dir = Path(output_dir)
 
@@ -163,6 +163,11 @@ class MinerUProcessor:
             new_doc = fitz.open()
             new_doc.insert_pdf(doc, from_page=idx, to_page=idx)
             out_path = self.page_pdf_dir / f"{file_stem}_page_{idx + 1:04d}.pdf"  # 将PDF单页存入指定目录
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
             new_doc.save(out_path)
             new_doc.close()
             page_files.append({"page_no": idx + 1, "pdf_path": str(out_path)})
@@ -559,6 +564,11 @@ class MinerUProcessor:
 
         result = await self.call_mineru(pdf_path)
         raw_save_path = self.page_result_dir / f"page_{page_no:04d}_mineru.json"
+        if raw_save_path.exists():
+            try:
+                raw_save_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(raw_save_path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(result, ensure_ascii=False, indent=2))
         doc_data = self.extract_doc_data_from_mineru_result(result)
@@ -575,6 +585,11 @@ class MinerUProcessor:
         )
 
         debug_save_path = self.page_result_dir / f"page_{page_no:04d}_debug.json"
+        if debug_save_path.exists():
+            try:
+                debug_save_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(debug_save_path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(debug_info, ensure_ascii=False, indent=2))
 
@@ -609,6 +624,11 @@ class MinerUProcessor:
         mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat, alpha=False)
         out_path = self.page_render_dir / f"page_{page_no:04d}_render.png"
+        if out_path.exists():
+            try:
+                out_path.unlink()
+            except OSError:
+                pass
         pix.save(out_path)
         doc.close()
         logger.info(f"[MinerU] 第 {page_no} 页整页渲染完成: {out_path} ({pix.width}x{pix.height})")
@@ -661,6 +681,11 @@ class MinerUProcessor:
                 key_name = f"{key_name}.{ext}"
             out_name = f"page_{page_no:04d}_{key_name}"  # 图片文件名
             out_path = self.img_dir / out_name
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
             async with aiofiles.open(out_path, "wb") as f:
                 await f.write(img_bytes)
             # middle_json 的 image_path/锚点引用是原始文件名(如 501fbc....jpg)，这里记录其对应的落盘路径，供 build_page_anchors 用统一落盘路径把"达标插图"正确写进 anchors.json。
@@ -1280,6 +1305,11 @@ class MinerUProcessor:
                     "image_paths": [render_img_path],
                 }]
 
+            if page_md_path.exists():
+                try:
+                    page_md_path.unlink()
+                except OSError:
+                    pass
             async with aiofiles.open(page_md_path, "w", encoding="utf-8") as f:
                 await f.write(final_md)
 
@@ -1346,6 +1376,11 @@ class MinerUProcessor:
         final_md = self.normalize_md_text(replaced_md)
 
         page_md_path = self.page_result_dir / f"page_{page_no:04d}_final.md"
+        if page_md_path.exists():
+            try:
+                page_md_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(page_md_path, "w", encoding="utf-8") as f:
             await f.write(final_md)
 
@@ -1421,6 +1456,11 @@ class MinerUProcessor:
 
     async def write_anchors_json(self, merged):  # 把合并结果的插图锚点/过滤记录落盘为 anchors.json
         anchors_path = self.doc_dir / "anchors.json"
+        if anchors_path.exists():
+            try:
+                anchors_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(anchors_path, "w", encoding="utf-8") as f:
             await f.write(json.dumps(
                 {
@@ -1438,6 +1478,11 @@ class MinerUProcessor:
 
     async def write_merged_md(self, text: str) -> Path:
         merged_md_path = self.doc_dir / "merged.md"
+        if merged_md_path.exists():
+            try:
+                merged_md_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(merged_md_path, "w", encoding="utf-8") as f:
             await f.write(text or "")
         logger.info(f"[MinerU] 整篇 Markdown 已输出到：{merged_md_path}")
@@ -1477,6 +1522,11 @@ class MinerUProcessor:
         logger.info("[MinerU] ========== 第三步：按页顺序拼接 ==========")
         merged = self.merge_page_results(all_page_results)
         merged_md_path = self.doc_dir / "merged.md"
+        if merged_md_path.exists():
+            try:
+                merged_md_path.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(merged_md_path, "w", encoding="utf-8") as f:
             await f.write(merged["md_content"])
         logger.info(f"[MinerU] 拼接完成，整篇 Markdown 已输出到：{merged_md_path}")

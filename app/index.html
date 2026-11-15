@@ -1709,7 +1709,7 @@
         更多选项
       </div>
       <div id="renameMoreSection" style="display:none;margin-top:8px">
-        <label class="modal-field-label">文件期限 <span class="help-badge" data-tip="若选择临时，则以填写的日期为过期时间，过期文件将排除在检索之外。">?</span></label>
+        <label class="modal-field-label">文件期限 <span class="help-badge" data-tip="若选择临时，则需要填写过期时间，过期文件将排除在检索之外。">?</span></label>
         <div style="display:flex;gap:16px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
             <input type="radio" name="expireRadio" value="permanent" checked /> 永久
@@ -1720,7 +1720,7 @@
         </div>
         <input type="text" class="modal-input" id="expireInput" placeholder="YYYY/MM/DD" maxlength="10"
                style="margin-top:8px;display:none;font-family:var(--ff-mono);letter-spacing:1px" />
-        <label class="modal-field-label">是否展示文件内图片 <span class="help-badge" data-tip="选择不展示，文件内图片将不会被展示，但图片内容仍可正常检索。">?</span></label>
+        <label class="modal-field-label">图片展示 <span class="help-badge" data-tip="若选择不展示，文件内图片将不会在聊天中展示给用户，但图片内容仍可检索。">?</span></label>
         <div style="display:flex;gap:16px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
             <input type="radio" name="ifShowRadio" value="true" checked /> 展示
@@ -1729,7 +1729,7 @@
             <input type="radio" name="ifShowRadio" value="false" /> 不展示
           </label>
         </div>
-        <label class="modal-field-label">子块重写 <span class="help-badge" data-tip="开启后，将对子块进行指代消解重写，提升检索准确率，但会消耗额外Token。">?</span></label>
+        <label class="modal-field-label">子块重写 <span class="help-badge" data-tip="若开启，子块文本将进行优化，提升检索精度，但会消耗额外Token。">?</span></label>
         <div style="display:flex;gap:16px;margin-top:4px">
           <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
             <input type="radio" name="rewriteMode" value="smart" /> 开启
@@ -1738,6 +1738,8 @@
             <input type="radio" name="rewriteMode" value="none" checked /> 关闭
           </label>
         </div>
+        <label class="modal-field-label" style="margin-top:12px">文件描述 <span class="help-badge" data-tip="该描述将帮助象象仔快速检索。">?</span></label>
+        <input type="text" class="modal-input" id="fileDescInput" placeholder="选填，简单概括文件内容" style="margin-top:4px" />
       </div>
     </div>
     <div class="modal-footer">
@@ -2070,6 +2072,8 @@
     expireInput.style.display = 'none';  // 默认隐藏填写框
     document.querySelector('input[name="ifShowRadio"][value="true"]').checked = true;  // 默认展示图片
     document.querySelector('input[name="rewriteMode"][value="none"]').checked = true;  // 默认关闭重写
+    const fileDescInput = document.getElementById('fileDescInput');
+    if (fileDescInput) fileDescInput.value = '';
     renameMoreSection.style.display = 'none';  // 默认收起"更多"
     renameMoreArrow.style.transform = 'rotate(-90deg)';
     renameModal.style.display = 'flex';
@@ -2130,6 +2134,11 @@
     formData.append('if_show', document.querySelector('input[name="ifShowRadio"]:checked')?.value !== 'false');
     const rewriteMode = document.querySelector('input[name="rewriteMode"]:checked');
     formData.append('rewrite_mode', rewriteMode ? rewriteMode.value : 'none');
+    const fileDescInput = document.getElementById('fileDescInput');
+    const fileDesc = fileDescInput ? fileDescInput.value.trim() : '';
+    if (fileDesc) {
+      formData.append('file_description', fileDesc);
+    }
 
     try {
       const res = await apiFetch('/chunk/upload', { method: 'POST', body: formData });
@@ -2615,10 +2624,11 @@
 
   // 更新 KPI 统计卡片 —— 从文件列表计算（用于 loadFileList 时同步更新，与后端 stats 互为兜底）
   function updateKpiCards(files) {
-    const docCount = files.filter(f => f.status !== 'orphan').length;  // 仅统计已入库文档
+    const docCount = files.filter(f => f.status === 'ingested').length;  // 仅统计完整入库的文档
     let totalChunks = 0;
     let totalSize = 0;
     for (const f of files) {
+      if (f.status !== 'ingested') continue;
       totalChunks += f.total_chunks || 0;
       totalSize += f.file_size || 0;
     }
@@ -2660,7 +2670,7 @@
   }
 
   function _sortKeyVal(f, key) {
-    if (key === 'name')   return (f.original_name || '').toLowerCase();
+    if (key === 'name')   return (f.file_name || '').toLowerCase();
     if (key === 'chunks') return f.total_chunks || 0;
     if (key === 'time')   return f.upload_time ? new Date(f.upload_time).getTime() : 0;
     return '';
@@ -2676,7 +2686,7 @@
 
     // 应用搜索过滤
     const filtered = _kbSearchQuery
-      ? _kbFiles.filter(f => (f.original_name || '').toLowerCase().includes(_kbSearchQuery))
+      ? _kbFiles.filter(f => (f.file_name || '').toLowerCase().includes(_kbSearchQuery))
       : _kbFiles;
 
     if (!filtered.length) {
@@ -2702,23 +2712,26 @@
     });
 
     bodyEl.innerHTML = sorted.map((f, i) => {
-        const ext = f.original_name.match(/\.\w+$/)?.[0]?.slice(1)?.toLowerCase() || '';
+        const ext = f.file_name.match(/\.\w+$/)?.[0]?.slice(1)?.toLowerCase() || '';
         const uploadDate = f.upload_time ? new Date(f.upload_time).toISOString().slice(0,10) : '';
         const safeFile = escapeHtml(f.file_name);
-        const safeName = escapeHtml(f.original_name);
+        const safeName = escapeHtml(f.file_name);
         const isOrphan = f.status === 'orphan';
+        const isIncomplete = f.status === 'incomplete';
         const isAdminShared = f.is_admin_shared === true;
         const iconHtml = fileTypeSvg(ext);
 
         // 状态标签（Figma 风格胶囊标签）
-        const statusTag = isOrphan
+        const statusTag = isIncomplete
+          ? `<span class="kb-status-tag kb-status-orphan" title="缺少${(f.missing||[]).join('和')}，请重新上传">${ICON_SVG.cross} 未成功</span>`
+          : isOrphan
           ? `<span class="kb-status-tag kb-status-orphan" title="上传失败或未索引">${ICON_SVG.cross} 未入库</span>`
           : isAdminShared
           ? `<span class="kb-status-tag kb-status-ready" title="管理员共享文件">${ICON_SVG.check} 共享</span>`
           : `<span class="kb-status-tag kb-status-ready">${ICON_SVG.check} 已就绪</span>`;
-        // admin 共享文件：点击行打开全文（非切片），无 checkbox 不可批量删除
-        const rowClick = (isOrphan || isAdminShared) ? '' : `onclick="openChunkDrawer('${safeFile}', '${safeName}')"`;
-        const cursor = (isOrphan || isAdminShared) ? 'default' : 'pointer';
+        // incomplete/orphan/admin共享 文件不可点击行打开切片
+        const rowClick = (isOrphan || isIncomplete || isAdminShared) ? '' : `onclick="openChunkDrawer('${safeFile}', '${safeName}')"`;
+        const cursor = (isOrphan || isIncomplete || isAdminShared) ? 'default' : 'pointer';
         const checked = _selectedFiles.has(f.file_name) ? 'checked' : '';
         const checkboxHtml = isAdminShared
           ? '<span style="opacity:0.3;cursor:not-allowed" title="管理员共享文件，不可删除">—</span>'
@@ -2737,12 +2750,12 @@
             <td>${uploadDate}</td>
             <td style="text-align:center">
               <div class="row-actions" style="gap:4px" onclick="event.stopPropagation()">
-                ${(isOrphan || isAdminShared) ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
+                ${(isOrphan || isIncomplete || isAdminShared) ? '' : `<button class="kb-action-btn" onclick="openChunkDrawer('${safeFile}', '${safeName}')" title="查看切片">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v18"/><path d="M15 3v18"/><rect x="3" y="5" width="6" height="14" rx="1"/><rect x="15" y="5" width="6" height="14" rx="1"/></svg>
                 </button>`}
-                <button class="kb-action-btn" onclick="openParsedEditor('${safeFile}', '${safeName}', ${isAdminShared})" title="查看全文">
+                ${(isOrphan || isIncomplete) ? '' : `<button class="kb-action-btn" onclick="openParsedEditor('${safeFile}', '${safeName}', ${isAdminShared})" title="查看全文">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/></svg>
-                </button>
+                </button>`}
                 ${isAdminShared ? '' : `<button class="kb-action-btn kb-action-danger" onclick="confirmDelete('${safeFile}', '${safeName}', '${f.status}')" title="删除文件">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
                 </button>`}

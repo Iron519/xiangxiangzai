@@ -307,7 +307,8 @@ async def _trigger_next_queued(uid: str) -> None:
 async def _background_process(task_id: str, save_path: str, original_name: str, uid: str = "anonymous",
                               expire_time: Optional[str] = None,
                               if_show: bool = True,
-                              rewrite_mode: str = "none") -> None:
+                              rewrite_mode: str = "none",
+                              file_description: str = "") -> None:
     """后台协程：解析 → [解析完成] → 切块 → 向量化 → 入库 → [注入完成]。
 
     两阶段进度：
@@ -323,7 +324,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             # ── 阶段1：解析 ──
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
             logger.info(f"[Task {task_id}] 开始解析文件: {save_path}")
-            parsed_text = await DocumentParser().parse_file(save_path, display_name=original_name, uid=uid)
+            parsed_text = await DocumentParser().parse_file(save_path, uid=uid)
 
             # 解析完成检查点：用户可能在解析期间点击了停止
             # cancel 接口已删文件和任务记录，此处检测到文件被删 → 直接退出
@@ -397,6 +398,14 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             )
             logger.info(f"[Task {task_id}] 注入完成！共 {summary.get('chunk_count', 0)} 个切片")
             invalidate_kb_bm25()
+
+            _save_name = os.path.basename(save_path)
+            if file_description and file_description.strip():
+                from calculate_logic.rag.file_tagging import write_manual_description
+                write_manual_description(uid, _save_name, file_description)
+            else:
+                from calculate_logic.rag.file_tagging import generate_file_description
+                asyncio.create_task(generate_file_description(uid, _save_name, original_name))
     except TaskCancelled:
         logger.info(f"[Task {task_id}] 任务已被中止: {original_name}")
         _cleanup_task_artifacts(save_path, uid)
@@ -417,13 +426,14 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
 
 async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                               original_name: str, uid: str = "anonymous", if_show: bool = True,
-                              rewrite_mode: str = "none") -> None:
+                              rewrite_mode: str = "none",
+                              file_description: str = "") -> None:
     """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。"""
     embedding_model = None
     try:
         async with _upload_sem:
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSING)
-            merged_text = _read_merged_md(save_path, uid, original_name)
+            merged_text = _read_merged_md(file_name, uid)
             if not merged_text.strip():
                 raise RuntimeError("merged.md 为空，无法重新切片。请先在编辑页输入内容并保存。")
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_PARSED,
@@ -487,6 +497,13 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             )
             logger.info(f"[Rechunk] 重切片完成 {original_name}: {summary.get('chunk_count', 0)} 切片")
             invalidate_kb_bm25()
+
+            if file_description and file_description.strip():
+                from calculate_logic.rag.file_tagging import write_manual_description
+                write_manual_description(uid, file_name, file_description)
+            else:
+                from calculate_logic.rag.file_tagging import generate_file_description
+                asyncio.create_task(generate_file_description(uid, file_name, original_name))
     except TaskCancelled:
         logger.info(f"[Rechunk] 任务 {task_id} 被中止")
     except Exception as e:
@@ -511,6 +528,7 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
                       expire_time: str = Form(None), if_show: bool = Form(False),
                       rewrite_mode: str = Form("none"),
                       overwrite: bool = Form(False),
+                      file_description: str = Form(None),
                       current_user: TokenData = Depends(get_current_user)):
     """上传知识库文件，保存后立即返回 task_id，后台异步执行解析入库流程。
 
@@ -561,6 +579,11 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
             )
 
     content = await file.read()
+    if os.path.exists(save_path):
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
     with open(save_path, "wb") as f:
         f.write(content)
     logger.info(f"文件已保存: {save_path} ({len(content)} bytes) expire_time={expire_iso}")
@@ -586,7 +609,8 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     # 立即启动后台异步处理，信号量控制并发上限
     asyncio.create_task(_background_process(task_id, save_path, original_name, uid=uid,
                                             expire_time=expire_iso, if_show=if_show,
-                                            rewrite_mode=rewrite_mode))
+                                            rewrite_mode=rewrite_mode,
+                                            file_description=file_description or ""))
 
     return JSONResponse(content={
         "success": True,
@@ -687,13 +711,11 @@ async def kb_upload_sse(token: str = "", current_user: TokenData = Depends(get_c
 
 def _has_parse_result(file_name: str, uid: str) -> bool:
     """检查全文解析结果 merged.md 是否存在。
-    路径：parse_result/{uid}/{file_stem}/merged.md（兼容旧结构 parse_result/{file_stem}/merged.md）
+    路径：parse_result/{uid}/{file_stem}/merged.md
+    file_name 即 upload_kb 中的物理文件名（用户修改后的展示名），与 parse_result 目录名一致。
     """
     stem = Path(file_name).stem.replace(" ", "_")
-    for base in [Path(PARSE_RESULT_DIR) / uid / stem, Path(PARSE_RESULT_DIR) / stem]:
-        if (base / "merged.md").is_file():
-            return True
-    return False
+    return (Path(PARSE_RESULT_DIR) / uid / stem / "merged.md").is_file()
 
 
 def _has_original_file(file_path: str, file_name: str, uid: str) -> bool:
@@ -723,7 +745,6 @@ def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
                     cur.execute(f"""
                         SELECT
                             k.file_name,
-                            COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
                             k.file_path,
                             COUNT(*)                                          AS total_chunks,
                             COUNT(DISTINCT k.group_id)                        AS parent_chunks,
@@ -732,16 +753,14 @@ def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
                             COALESCE(MAX(k.file_size), 0)                     AS file_size,
                             k.uid
                         FROM {KB_TABLE} k
-                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
                         WHERE k.uid = %s
-                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name, k.uid
+                        GROUP BY k.file_name, k.file_path, k.uid
                         ORDER BY MIN(k.upload_time) DESC
                     """, (uid,))
                 else:
                     cur.execute(f"""
                         SELECT
                             k.file_name,
-                            COALESCE(t.original_name, k.original_name, k.file_name) AS original_name,
                             k.file_path,
                             COUNT(*)                                          AS total_chunks,
                             COUNT(DISTINCT k.group_id)                        AS parent_chunks,
@@ -750,9 +769,8 @@ def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
                             COALESCE(MAX(k.file_size), 0)                     AS file_size,
                             k.uid
                         FROM {KB_TABLE} k
-                        LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name
                         WHERE k.uid IN (%s, %s)
-                        GROUP BY k.file_name, k.file_path, k.original_name, t.original_name, k.uid
+                        GROUP BY k.file_name, k.file_path, k.uid
                         ORDER BY MIN(k.upload_time) DESC
                     """, (uid, ADMIN_UID))
                 rows = cur.fetchall()
@@ -768,33 +786,50 @@ def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
         skipped = 0
         for row in rows:
             file_name = row[0]
-            file_path = row[2]
-            file_owner_uid = row[8] or ""
+            file_path = row[1]
+            file_owner_uid = row[7] or ""
             is_shared = (not is_admin) and (file_owner_uid == ADMIN_UID)
             check_uid = file_owner_uid if is_shared else uid
-            if not _has_original_file(file_path, file_name, check_uid):
+
+            has_orig = _has_original_file(file_path, file_name, check_uid)
+            has_parse = _has_parse_result(file_name, check_uid)
+
+            if not has_orig or not has_parse:
                 skipped += 1
-                logger.debug(f"[KBFiles] 跳过 {file_name}: 原文件存档不存在")
+                missing = []
+                if not has_orig:
+                    missing.append("原文件")
+                if not has_parse:
+                    missing.append("解析结果")
+                logger.debug(f"[KBFiles] 不完整文件 {file_name}（uid={check_uid}）: 缺少{'+'.join(missing)}")
+                files.append({
+                    "file_name":          file_name,
+                    "file_path":          file_path,
+                    "file_size":          row[6] or _disk_size_by_path(file_path),
+                    "total_chunks":       row[2],
+                    "parent_chunks":      row[3],
+                    "upload_time":        row[4].isoformat() if row[4] else "",
+                    "last_update":        row[5].isoformat() if row[5] else "",
+                    "status":             "incomplete",
+                    "missing":            missing,
+                    "is_admin_shared":    is_shared,
+                })
                 continue
-            if not _has_parse_result(file_name, check_uid):
-                skipped += 1
-                logger.debug(f"[KBFiles] 跳过 {file_name}: 全文解析结果不存在")
-                continue
+
             files.append({
                 "file_name":          file_name,
-                "original_name":      row[1],
                 "file_path":          file_path,
-                "file_size":          row[7] or _disk_size_by_path(file_path),
-                "total_chunks":       row[3],
-                "parent_chunks":      row[4],
-                "upload_time":        row[5].isoformat() if row[5] else "",
-                "last_update":        row[6].isoformat() if row[6] else "",
+                "file_size":          row[6] or _disk_size_by_path(file_path),
+                "total_chunks":       row[2],
+                "parent_chunks":      row[3],
+                "upload_time":        row[4].isoformat() if row[4] else "",
+                "last_update":        row[5].isoformat() if row[5] else "",
                 "status":             "ingested",
                 "is_admin_shared":    is_shared,
             })
 
         if skipped:
-            logger.info(f"[KBFiles] 过滤掉 {skipped} 个不完整文件（缺少原文件或解析结果）")
+            logger.info(f"[KBFiles] {skipped} 个不完整文件已标记为 incomplete（缺少原文件或解析结果）")
 
         return files
     except Exception as e:
@@ -809,9 +844,10 @@ def _kb_stats(uid: str, is_admin: bool = False) -> dict:
     非管理员用户的统计包含 admin 共享文件。
     """
     files = _query_kb_files_with_filter(uid, is_admin)
-    doc_count = len(files)
-    chunk_count = sum(f.get("total_chunks", 0) for f in files)
-    total_size = sum(f.get("file_size", 0) for f in files)
+    complete_files = [f for f in files if f.get("status") == "ingested"]
+    doc_count = len(complete_files)
+    chunk_count = sum(f.get("total_chunks", 0) for f in complete_files)
+    total_size = sum(f.get("file_size", 0) for f in complete_files)
     return {
         "doc_count": doc_count,
         "chunk_count": chunk_count,
@@ -1091,46 +1127,66 @@ async def kb_task_cancel(task_id: str, current_user: TokenData = Depends(get_cur
 # 前端"知识库管理"里查看/编辑某文件整篇解析文本（merged.md），编辑后重新切片入库。
 
 
-def _kb_file_row(file_name: str) -> dict[str, Any] | None:
-    """从知识库表查出某 file_name 的一行(file_path/original_name/expire_time/if_show/uid)。"""
+def _kb_file_row(file_name: str, viewer_uid: str = "") -> dict[str, Any] | None:
+    """从知识库表查出某 file_name 的一行(file_path/original_name/expire_time/if_show/uid)。
+    优先取 viewer_uid 自己的文件，其次取 admin 共享文件。
+    original_name 仅用于审计和入库，不用于 parse_result 路径查找。
+    """
     if not KB_TABLE:
         return None
     try:
         with _kb_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    f"SELECT k.file_name, k.file_path, "
-                    f"COALESCE(t.original_name, k.original_name, k.file_name) AS original_name, "
-                    f"k.expire_time, k.if_show, k.uid, t.uid AS task_uid "
-                    f"FROM {KB_TABLE} k "
-                    f"LEFT JOIN {UPLOAD_TASKS_TABLE} t ON t.save_name = k.file_name "
-                    f"WHERE k.file_name = %s LIMIT 1",
-                    (file_name,),
-                )
+                if viewer_uid:
+                    cur.execute(
+                        f"SELECT k.file_name, k.file_path, k.original_name, "
+                        f"k.expire_time, k.if_show, k.uid "
+                        f"FROM {KB_TABLE} k "
+                        f"WHERE k.file_name = %s AND k.uid IN (%s, %s) "
+                        f"ORDER BY CASE WHEN k.uid = %s THEN 0 ELSE 1 END "
+                        f"LIMIT 1",
+                        (file_name, viewer_uid, ADMIN_UID, viewer_uid),
+                    )
+                else:
+                    cur.execute(
+                        f"SELECT k.file_name, k.file_path, k.original_name, "
+                        f"k.expire_time, k.if_show, k.uid "
+                        f"FROM {KB_TABLE} k "
+                        f"WHERE k.file_name = %s LIMIT 1",
+                        (file_name,),
+                    )
                 row = cur.fetchone()
         if not row:
             return None
-        return {"file_name": row[0], "file_path": row[1], "original_name": row[2],
+        file_path = row[1] or ""
+        # 优先从 file_path 提取上传者 uid（/app/upload_kb/{uid}/xxx）
+        path_uid = ""
+        if file_path:
+            parts = Path(file_path).parts
+            if "upload_kb" in parts:
+                idx = parts.index("upload_kb")
+                if idx + 1 < len(parts):
+                    path_uid = parts[idx + 1]
+        return {"file_name": row[0], "file_path": file_path, "original_name": row[2] or "",
                 "expire_time": row[3], "if_show": bool(row[4]),
-                "uid": row[5] or row[6] or ""}
+                "uid": path_uid or row[5] or ""}
     except Exception as e:
         logger.warning(f"[ParsedText] 查询文件记录失败 {file_name}: {e}")
         return None
 
 
-def _merged_md_path(file_path: str, uid: str = "", original_name: str = "") -> Path:
-    """由入库源文件的物理路径，推算其 parse_result 产物目录下的 merged.md。
-    约定：parse_result/{uid}/{file_stem}/merged.md
-    解析器优先用 display_name(original_name) 做目录名，因此这里也优先用 original_name。
+def _merged_md_path(file_name: str, uid: str = "") -> Path:
+    """由文件名推算其 parse_result 产物目录下的 merged.md。
+    路径：parse_result/{uid}/{file_stem}/merged.md
+    file_name 即 upload_kb 中的物理文件名，parse_result 目录名用同一 stem。
     """
-    base_name = original_name or file_path
-    stem = Path(base_name).stem.replace(" ", "_")
+    stem = Path(file_name).stem.replace(" ", "_")
     return Path(PARSE_RESULT_DIR) / uid / stem / "merged.md"
 
 
-def _read_merged_md(file_path: str, uid: str = "", original_name: str = "") -> str:
+def _read_merged_md(file_name: str, uid: str = "") -> str:
     """读取源文件对应的 merged.md 全文；不存在/读失败返回 ""。"""
-    p = _merged_md_path(file_path, uid, original_name)
+    p = _merged_md_path(file_name, uid)
     try:
         if not p.exists():
             return ""
@@ -1149,14 +1205,13 @@ class ParsedTextUpdate(BaseModel):
 @router.get("/kb/file/{file_name}/parsed-text")
 async def kb_file_parsed_text(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """返回指定文件整篇解析结果（merged.md）文本，供前端查看/编辑。"""
-    row = _kb_file_row(file_name)
+    row = _kb_file_row(file_name, viewer_uid=current_user.uid)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
-    text = _read_merged_md(row["file_path"], row.get("uid", ""), row.get("original_name", ""))
+    text = _read_merged_md(row["file_name"], row.get("uid", ""))
     return JSONResponse(content={
         "success": True,
         "file_name": row["file_name"],
-        "original_name": row["original_name"],
         "parsed_text": text,
         "has_text": bool(text.strip()),
     })
@@ -1166,15 +1221,20 @@ async def kb_file_parsed_text(file_name: str, current_user: TokenData = Depends(
 async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
                                      current_user: TokenData = Depends(get_current_user)):
     """把编辑后的全文写回 merged.md（供之后重新切片入库）。"""
-    row = _kb_file_row(file_name)
+    row = _kb_file_row(file_name, viewer_uid=current_user.uid)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
     # 非管理员不能编辑 admin 共享文件
     if not current_user.is_admin and row.get("uid", "") == ADMIN_UID:
         return JSONResponse(status_code=403, content={"error": "无权编辑管理员共享文件", "file_name": file_name})
-    p = _merged_md_path(row["file_path"], row.get("uid", ""), row.get("original_name", ""))
+    p = _merged_md_path(row["file_name"], row.get("uid", ""))
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
         with open(p, "w", encoding="utf-8") as f:
             f.write(body.parsed_text)
         logger.info(f"[ParsedText] 已更新 merged.md: {p} ({len(body.parsed_text)} chars)")
@@ -1187,7 +1247,7 @@ async def kb_file_update_parsed_text(file_name: str, body: ParsedTextUpdate,
 @router.post("/kb/file/{file_name}/rechunk")
 async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_current_user)):
     """用当前 merged.md 全文重新切片入库（跳过解析）。异步执行，返回 task_id。"""
-    row = _kb_file_row(file_name)
+    row = _kb_file_row(file_name, viewer_uid=current_user.uid)
     if not row:
         return JSONResponse(status_code=404, content={"error": "文件不存在或未入库", "file_name": file_name})
     # 非管理员不能对 admin 共享文件重新切片
@@ -1203,7 +1263,8 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
     asyncio.create_task(_background_rechunk(task_id, row["file_name"], row["file_path"],
                                             row["original_name"], uid=uid,
                                             if_show=row.get("if_show", True),
-                                            rewrite_mode="none"))
+                                            rewrite_mode="none",
+                                            file_description=""))
     return JSONResponse(content={"success": True, "task_id": task_id,
                                  "original_name": row["original_name"],
                                  "message": "已开始重新切片入库"})

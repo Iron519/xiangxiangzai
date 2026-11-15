@@ -113,12 +113,10 @@ SEARCH_RRF_K = 60                                # RRF 融合常数 = weight/(k+
 
 SEARCH_DYNAMIC_TOPK = True                       # 是否启用动态 top-K（断崖检测自动截断，否则固定取 RERANK_TOP_K 条）
 SEARCH_FINAL_MIN_TOP_K = 2                       # 动态 top-K 最少保留条数
-SEARCH_FINAL_MAX_TOP_K = 10                      # 动态 top-K 最多保留条数
+SEARCH_FINAL_MAX_TOP_K = 15                      # 动态 top-K 最多保留条数（安全阀，需 >= LLM 规划的 top_k 上限）
 SEARCH_RELATIVE_SCORE_RATIO = 0.25               # 相对分数兜底：保留下界 ≥ 最高分×ratio 的所有结果；0.25 宽松，保留更多弱相关结果
 SEARCH_MIN_GAP = float("1e-5")                   # 断崖阈值：相邻分数差超过此值视为"崖"
 SEARCH_GAP_RATIO = 1.5                           # 断崖判定倍率：最大间隙/其余平均间隙 ≥ 此值才触发；1.5 更难触发断崖，保留更多结果
-
-MAX_CONCURRENT_SEARCHES = 10                     # 批量检索最大并发数
 
 
 # ================= 数据模型 =================
@@ -547,20 +545,6 @@ class PgHybridRetriever:
         )
 
     # ----------------- 数据库检索 -----------------
-    def _get_conn(self):
-        """从连接池获取连接，返回的是上下文管理器"""
-        pool = self._get_pool()
-        conn = pool.getconn()
-        register_vector(conn)
-        return conn
-
-    def _return_conn(self, conn):
-        """归还连接到池"""
-        try:
-            self._get_pool().putconn(conn)
-        except Exception:
-            pass
-
     def _vector_search(self, conn: psycopg.Connection, query_time: datetime,
                        query_embedding: List[float], candidate_top_k: int,
                        uid: str = "") -> List[Dict[str, Any]]:
@@ -930,36 +914,6 @@ class PgHybridRetriever:
         return self._build_resp(query_text, query_time, vector_weight, keyword_weight,
                                 candidate_top_k, coarse_top_k, rerank_top_k, rrf_k,
                                 coarse_results, final_results, reason)
-
-    # ----------------- 批量检索 -----------------
-    async def batch_search(self, queries: List[str],
-                           vector_weight: float = SEARCH_VECTOR_WEIGHT,
-                           keyword_weight: float = SEARCH_KEYWORD_WEIGHT,
-                           candidate_top_k: int = SEARCH_CANDIDATE_TOP_K,
-                           coarse_top_k: int = SEARCH_COARSE_TOP_K,
-                           rerank_top_k: int = SEARCH_RERANK_TOP_K,
-                           rrf_k: int = SEARCH_RRF_K,
-                           max_concurrent: int = MAX_CONCURRENT_SEARCHES,
-                           uid: str = "") -> List[HybridSearchResponse]:
-        logger.info(f"[batch_search] 查询开始: {len(queries)}个查询, 并发={max_concurrent}")
-
-        sem = asyncio.Semaphore(max_concurrent)
-
-        async def _one(query: str) -> HybridSearchResponse:
-            async with sem:
-                return await self.search(query, None, vector_weight, keyword_weight,
-                                         candidate_top_k, coarse_top_k, rerank_top_k, rrf_k, uid=uid)
-
-        raw = await asyncio.gather(*[_one(q) for q in queries], return_exceptions=True)
-        results = []
-        for q, r in zip(queries, raw):
-            if isinstance(r, Exception):
-                logger.error(f"[batch_search] 查询失败 '{q}': {r}")
-            else:
-                results.append(r)
-
-        logger.info(f"[batch_search] 查询完成: 成功{len(results)}/{len(queries)}个")
-        return results
 
     # ----------------- 工具方法 -----------------
     @staticmethod

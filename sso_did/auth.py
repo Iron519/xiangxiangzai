@@ -106,17 +106,6 @@ async def get_current_user(
     return decode_access_token(credentials.credentials)
 
 
-async def get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
-) -> TokenData | None:
-    if not credentials:
-        return None
-    try:
-        return decode_access_token(credentials.credentials)
-    except HTTPException:
-        return None
-
-
 async def get_current_user_sse(
     credentials: HTTPAuthorizationCredentials | None = Depends(security_scheme),
     token: str = "",

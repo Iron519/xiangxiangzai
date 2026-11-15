@@ -589,6 +589,11 @@ class DocumentParser:
     # ============================================================
     async def _convert_office_to_pdf(self, input_path: str, output_path: str) -> bool:
         if input_path.lower().endswith('.pdf'):
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
             shutil.copy(input_path, output_path)
             return True
         logger.info("尝试将 Office 文档转换为 PDF ...")
@@ -984,8 +989,7 @@ class DocumentParser:
     # Office 解析产物统一落盘：merged.md(整篇Markdown) + anchors.json(图↔内容映射)
     # ============================================================
     def _office_output_dir(self, file_path: str, display_name: str | None = None, uid: str = "") -> Path:
-        stem = Path(display_name or file_path).stem
-        stem = stem.replace(" ", "_")
+        stem = Path(file_path).stem.replace(" ", "_")
         if uid:
             return PARSE_RESULT_DIR / uid / stem
         return PARSE_RESULT_DIR / stem
@@ -1003,6 +1007,11 @@ class DocumentParser:
     async def _write_merged_md(self, out_dir: Path, md_text: str) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
         p = out_dir / "merged.md"
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(p, "w", encoding="utf-8") as f:
             await f.write(md_text or "")
         logger.info(f"[parse_file] 整篇 Markdown 已输出到：{p}")
@@ -1011,6 +1020,11 @@ class DocumentParser:
     async def _write_anchors_json(self, out_dir: Path, anchors: list) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
         p = out_dir / "anchors.json"
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
         async with aiofiles.open(p, "w", encoding="utf-8") as f:
             await f.write(json.dumps({"anchors": anchors, "filters": []}, ensure_ascii=False, indent=2))
         logger.info(f"[parse_file] 图片锚点已输出到：{p} (锚点 {len(anchors)} 条)")
