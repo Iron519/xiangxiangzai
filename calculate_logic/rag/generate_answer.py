@@ -454,6 +454,7 @@ FALLBACK_LLM_ERROR = os.getenv("FALLBACK_LLM_ERROR", "抱歉，我暂时无法�
 FALLBACK_SYSTEM_ERROR = os.getenv("FALLBACK_SYSTEM_ERROR", "抱歉，系统暂时遇到问题，请稍后再试。").strip()
 FALLBACK_TIMEOUT = os.getenv("FALLBACK_TIMEOUT", "抱歉，系统响应超时，请稍后再试。").strip()
 FALLBACK_EMPTY_RESPONSE = os.getenv("FALLBACK_EMPTY_RESPONSE", "抱歉，我暂时没有生成有效回答，请尝试换个问法或稍后再试。").strip()
+ABORT_REPLY = os.getenv("ABORT_REPLY", "回答已中止。").strip()
 async def _judge_sensitive(query: str) -> str:
     if not query or not query.strip():
         return "miss"
@@ -1517,9 +1518,22 @@ async def chat_stream(
                     logger.warning(f"[SessionTitle] 首轮标题生成失败: {title_err}")
 
         except Exception as e:
-            logger.error(f"[ChatStream] 流式输出异常: {str(e)}")
-            yield f"data: {json.dumps({'type': 'content', 'content': FALLBACK_SYSTEM_ERROR})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+            # 客户端主动中止时 yield 会抛异常，此时已有内容 + 中止话术落库
+            logger.warning(f"[ChatStream] 流式输出中断: {str(e)[:100]}")
+            try:
+                if not ctx.get("full_answer"):
+                    ctx["full_answer"] = ABORT_REPLY
+                else:
+                    ctx["full_answer"] = ctx["full_answer"].rstrip() + "\n\n" + ABORT_REPLY
+                ctx["final_mode"] = ctx.get("final_mode") or "aborted"
+                _persist_turn(ctx)
+            except Exception:
+                pass
+            try:
+                yield f"data: {json.dumps({'type': 'content', 'content': ABORT_REPLY})}\n\n"
+                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+            except Exception:
+                pass
 
     return StreamingResponse(stream_response(), media_type="text/event-stream")
 

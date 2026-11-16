@@ -1671,7 +1671,8 @@
                 <textarea class="chat-textarea" id="chatInput" placeholder="继续提问，或输入一个新问题…" rows="2"></textarea>
                 <div class="chat-input-toolbar">
                   <button class="chat-send-btn" id="sendBtn" disabled aria-label="发送">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+                    <svg id="sendIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+                    <svg id="stopIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
                   </button>
                 </div>
               </div>
@@ -3909,12 +3910,44 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     sendBtn.disabled = !chatInput.value.trim();
   });
   chatInput.addEventListener('keydown', e => { if (e.key==='Enter'&&!e.shiftKey&&!isStreaming) { e.preventDefault(); sendMessage(); } });
-  sendBtn.addEventListener('click', () => { if (!isStreaming) sendMessage(); });
+  sendBtn.addEventListener('click', () => {
+    if (isStreaming) {
+      abortStreaming();
+    } else {
+      sendMessage();
+    }
+  });
+
+  let _abortController = null;
+
+  function abortStreaming() {
+    if (_abortController) {
+      _abortController.abort();
+    }
+  }
+
+  function setSendButtonState(state) {
+    const sendIcon = document.getElementById('sendIcon');
+    const stopIcon = document.getElementById('stopIcon');
+    if (state === 'streaming') {
+      sendIcon.style.display = 'none';
+      stopIcon.style.display = '';
+      sendBtn.disabled = false;
+      sendBtn.setAttribute('aria-label', '停止');
+      sendBtn.style.background = 'var(--c-brand-dark)';
+    } else {
+      sendIcon.style.display = '';
+      stopIcon.style.display = 'none';
+      sendBtn.disabled = !chatInput.value.trim();
+      sendBtn.setAttribute('aria-label', '发送');
+      sendBtn.style.background = '';
+    }
+  }
 
   async function sendMessage() {
     const message = chatInput.value.trim();
     if (!message || isStreaming) return;
-    isStreaming = true; sendBtn.disabled = true; newChatBtn.disabled = true;
+    isStreaming = true; setSendButtonState('streaming'); newChatBtn.disabled = true;
     chatInput.value = ''; chatInput.style.height = 'auto';
     if (chatEmpty) chatEmpty.style.display = 'none';
     chatMessages.appendChild(createUserMsg(message)); scrollToBottom();
@@ -3955,15 +3988,17 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       currentTip = '';
     }
 
+    let buffer = '', fullAnswer = '', relatedQuestions = [], streamSources = [], turnCount = null;
     try {
+      _abortController = new AbortController();
       const res = await apiFetch('/chat/stream', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ session_id: sessionId, message })
+        body: JSON.stringify({ session_id: sessionId, message }),
+        signal: _abortController.signal
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '', fullAnswer = '', relatedQuestions = [], streamSources = [], turnCount = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -4015,9 +4050,24 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     } catch (err) {
       stopTips();
       streamingEl.remove();
-      chatMessages.appendChild(createAiMsg(`<p style="color:var(--c-rose)">请求失败，请重试。</p>`)); scrollToBottom();
+      if (err.name === 'AbortError') {
+        // 用户主动中止：显示已有内容 + 中止话术
+        let cleanAnswer = fullAnswer || '';
+        const delimiter = '---RELATED---';
+        if (cleanAnswer.includes(delimiter)) {
+          cleanAnswer = cleanAnswer.substring(0, cleanAnswer.indexOf(delimiter)).trim();
+        }
+        cleanAnswer = (cleanAnswer ? cleanAnswer + '\n\n' : '') + '回答已中止。';
+        chatMessages.appendChild(createAiMsg(renderMarkdown(cleanAnswer), {
+          turnCount, text: cleanAnswer
+        })); scrollToBottom();
+      } else {
+        chatMessages.appendChild(createAiMsg(`<p style="color:var(--c-rose)">请求失败，请重试。</p>`)); scrollToBottom();
+      }
+    } finally {
+      _abortController = null;
     }
-    isStreaming = false; sendBtn.disabled = !chatInput.value.trim(); newChatBtn.disabled = false;
+    isStreaming = false; setSendButtonState('idle'); newChatBtn.disabled = false;
     // 刷新侧边栏 session 列表（标题、时间戳可能已更新）
     loadSessionList();
   }
