@@ -347,15 +347,15 @@ class DocumentParser:
 
     async def _write_image_only_anchor(self, file_path: str, desc: str, uid: str = "") -> None:
         try:
-            stem = Path(file_path).stem.replace(" ", "_")
+            name = Path(file_path).name.replace(" ", "_")
             if uid:
-                out_dir = PARSE_RESULT_DIR / uid / stem
+                out_dir = PARSE_RESULT_DIR / uid / name
             else:
-                out_dir = PARSE_RESULT_DIR / stem
+                out_dir = PARSE_RESULT_DIR / name
             img_dir = out_dir / "images"
             img_dir.mkdir(parents=True, exist_ok=True)
             ext = os.path.splitext(file_path)[1].lower() or ".png"
-            img_dst = img_dir / f"{stem}{ext}"
+            img_dst = img_dir / name
             if not img_dst.exists():
                 shutil.copy2(file_path, img_dst)
             anchors = []
@@ -989,10 +989,10 @@ class DocumentParser:
     # Office 解析产物统一落盘：merged.md(整篇Markdown) + anchors.json(图↔内容映射)
     # ============================================================
     def _office_output_dir(self, file_path: str, display_name: str | None = None, uid: str = "") -> Path:
-        stem = Path(file_path).stem.replace(" ", "_")
+        name = Path(file_path).name.replace(" ", "_")
         if uid:
-            return PARSE_RESULT_DIR / uid / stem
-        return PARSE_RESULT_DIR / stem
+            return PARSE_RESULT_DIR / uid / name
+        return PARSE_RESULT_DIR / name
 
     def _save_anchor_image(self, out_dir: Path, img_bytes: bytes, img_name: str) -> str:
         img_dir = out_dir / "images"

@@ -111,11 +111,16 @@ CREATE TABLE myagent_kb_chunks (
 ```json
 {
   "description": "该文档介绍了BMW员工请假流程",
-  "tags": ["HR政策", "请假流程"],
-  "tag_source": "llm_auto",   // 或 "manual"
-  "tagged_at": "2026-11-15T10:00:00Z"
+  "tags": ["HR政策", "请假流程", "员工手册"],
+  "tag_source": "llm_auto",
+  "tagged_at": "2026-11-15T10:00:00Z",
+  "tag_reasoning": "文档内容覆盖请假流程和HR政策，涉及员工手册相关条款"
 }
 ```
+
+- `tag_source`：`"manual"`（用户手填）或 `"llm_auto"`（LLM 自动打标）
+- `tag_reasoning`：仅 `"llm_auto"` 时存在，LLM 打标推理过程
+- `tags`：≥3 个标签，用于检索 SQL 标签过滤和意图判断
 
 ### 2.4 会话表 `myagent_sessions`
 
@@ -134,7 +139,7 @@ CREATE TABLE myagent_sessions (
 ```
 
 - 每用户上限10个会话，超出时软删最早的
-- 首轮对话后自动生成会话标题（LLM一句话总结）
+- 首轮对话后异步生成会话标题（LLM 生成 10 字以内标题），生成失败时以用户问题前 6 字兜底
 
 ### 2.5 对话历史表 `myagent_conversations_history`
 
@@ -235,7 +240,7 @@ FAQ 为简单的问答对（id, question, answer），删除时自动重排 id�
 **支持格式**：PDF, DOCX, PPTX, XLSX, XLS, TXT, MD, CSV, JPEG, JPG, PNG
 
 **上传流程**：
-1. 前端弹窗：文件名 → 更多选项（期限、图片展示、子块重写、文件描述）→ 确认
+1. 前端弹窗：文件名 → 更多选项（期限、图片展示、文件描述）→ 确认
 2. 后端保存文件到 `upload_kb/{uid}/{display_name}`
 3. 创建任务记录，启动后台协程 `_background_process`
 4. 前端通过 SSE 实时监控进度（每1.5秒推送一次）
@@ -251,7 +256,7 @@ FAQ 为简单的问答对（id, question, answer），删除时自动重排 id�
 | XLSX/XLS | pandas 读取所有 sheet，openpyxl 提取单元格内嵌图片 → VLM 识别 |
 | JPG/PNG | VLM 直接描述图片内容 |
 
-**解析产物**：`parse_result/{uid}/{file_stem}/merged.md` + `anchors.json`
+**解析产物**：`parse_result/{uid}/{file_name_with_ext}/merged.md` + `anchors.json`
 
 ### 4.2 切片与嵌入
 
@@ -265,25 +270,29 @@ FAQ 为简单的问答对（id, question, answer），删除时自动重排 id�
 
 **嵌入**：OpenAI兼容API，模型由 `EMBEDDING_MODEL` 环境变量配置，向量维度1024。入库时 UPSERT（冲突键 `uid, file_name, text_hash`），写入后刷新 `content_tsv`（jieba分词 + `to_tsvector('simple')`）。
 
-### 4.3 子块重写
-
-可选功能（上传时 "子块重写" 开关）。检测子块中的代词（它/它们/其/该/此/这/那/本/上述...），用父块上下文做指代消解，让子块可独立理解。仅改写 `child_content`，`parent_content` 保留原文。注意：重写在嵌入之后执行，嵌入用的是重写前的文本。
-
-### 4.4 文件打标
+### 4.3 文件打标
 
 **触发时机**：文件注入完成后。
 
-**两种方式**（注入完成后在 `routes.py` 的 `_background_process` / `_background_rechunk` 中分支）：
+**两种方式**（注入完成后在 `routes.py` 的 `_background_process` 中分支）：
 - **用户手填**：上传弹窗"更多选项"中的"文件描述"选填框，填了则调用 `write_manual_description()` 直接写入 `metadata`（`tag_source: "manual"`），跳过LLM打标
-- **LLM自动打标**：用户没填时，fire-and-forget `asyncio.create_task(generate_file_description())`，异步调用 fast LLM 读取文件前3个父块内容（前2000字），生成1-2句描述 + 3-5个标签，写入 `metadata`（`tag_source: "llm_auto"`）
+- **LLM自动打标**：用户没填时，fire-and-forget `asyncio.create_task(generate_file_description())`，异步调用 fast LLM 读取文件前5个父块内容（前4000字），输出 reasoning + 1-2句描述 + ≥3个标签，写入 `metadata`（`tag_source: "llm_auto"`）
+
+**打标质量保障**：
+- 标签至少3个、最多5个，不允许为空列表
+- LLM 输出 `reasoning` 字段解释打标理由，存入 `metadata.tag_reasoning`
+- 标签不足3个时记录 warning，标签为空时跳过写入等待下次重试
+- `max_tokens` 提升到 400（含 reasoning），超时 30s
 
 **保护机制**：`generate_file_description()` 内部先调用 `has_manual_description()` 检查，如果已有手填描述（`tag_source == "manual"`）则跳过LLM打标，不覆盖。
 
-**用途**：
-- 文件描述 → 注入 `node_route_intent`，让 LLM 判断问题是否需要检索
-- 标签 → 存入 metadata，未来用于检索过滤
+**重新切片**：`_background_rechunk` 删除旧切片后插入新切片，不重新调用 LLM 打标。由于 `store_semantic_chunks` 不写入 metadata 列，重新切片后 metadata 重置为 `{}`（文件描述和标签丢失，需用户重新手填或等待下次上传时自动打标）。
 
-### 4.5 知识库管理功能
+**用途**：
+- 文件描述 → 注入 `node_plan_retrieval`，让 LLM 结合文件描述选择相关标签
+- 标签 → 存入 metadata，用于检索 SQL 过滤（`WHERE metadata->'tags' ?| array[...]`）
+
+### 4.4 知识库管理功能
 
 | 操作 | API | 说明 |
 |---|---|---|
@@ -301,10 +310,10 @@ FAQ 为简单的问答对（id, question, answer），删除时自动重排 id�
 
 **文件命名统一**：upload_kb、parse_result、PG 三处以用户修改后的展示名（`display_name_final`，即 `file_name` / `save_name`）为准：
 - `upload_kb/{uid}/{file_name}` — 物理文件名
-- `parse_result/{uid}/{file_stem}/merged.md` — 目录名用 `file_name` 的 stem（`Path(file_name).stem.replace(" ", "_")`）
+- `parse_result/{uid}/{file_name_with_ext}/merged.md` — 目录名用 `file_name` 的完整名（`Path(file_name).name.replace(" ", "_")`，保留后缀）
 - `kb_chunks` 表：`file_name` = 展示名（主键之一），`original_name` = 原始上传文件名（仅审计，不用于路径查找）
 
-解析器 `parse_file` 和 `miner_u_parse` 均用 `file_path`（即 `save_path`）的 stem 做 parse_result 目录名，不再传入 `display_name=original_name`。`_has_parse_result` / `_merged_md_path` / `_read_merged_md` 统一用 `file_name` 的 stem 定位，不再需要 `original_name` 参数，也不兼容旧目录结构。
+解析器 `parse_file` 和 `miner_u_parse` 均用 `file_path`（即 `save_path`）的完整文件名（`Path(file_path).name.replace(" ", "_")`，保留后缀）做 parse_result 目录名。`_has_parse_result` / `_merged_md_path` / `_read_merged_md` 统一用 `file_name` 的完整名定位。
 
 **前端展示文件名**：前端文件列表展示用 `file_name`（用户修改后的展示名），排序和搜索也基于 `file_name`。`original_name` 不参与前端展示。
 
@@ -316,9 +325,9 @@ FAQ 为简单的问答对（id, question, answer），删除时自动重排 id�
 
 **向量塔**：pgvector 余弦距离（`<=>` 操作符），取 top-10 候选。过滤条件：embedding非空 + 未过期 + uid在用户和管理员范围内。
 
-**关键词塔**：内存 BM25 索引（进程级单例），jieba 分词，IDF = `log((n+1)/df)`，BM25 参数 k1=1.5, b=0.75。取 top-10 候选。文件上传/删除时通过 `invalidate_kb_bm25()` 失效，下次检索时惰性重建。
+**关键词塔**：PG 全文检索（`content_tsv` + `to_tsquery('simple')` + `ts_rank`），jieba 分词。取 top-K 候选。无需维护内存索引，天然跨 worker 一致、实时生效。
 
-**RRF融合**：`score = vector_weight/(k+vector_rank) + keyword_weight/(k+bm25_rank)`，权重 0.6/0.4，k=60。融合后取 top-10 送入 reranker。
+**RRF融合**：`score = vector_weight/(k+vector_rank) + keyword_weight/(k+keyword_rank)`，权重 0.6/0.4，k=60。融合后取 top-K 送入 reranker。
 
 ### 5.2 Rerank
 
@@ -342,7 +351,7 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 `node_plan_retrieval` 的 LLM 根据问题难度输出 `search_strategy` 和 `planned_top_k`（钳制在 2-15）。
 
-`do_retrieval` 根据 `search_strategy` 调整 `candidate_top_k`（向量/BM25 各自初选数）和 `coarse_top_k`（RRF 融合后送 reranker 的条数），将 `planned_top_k` 传为 `rerank_top_k`（rerank 后最终返回上限）。
+`do_retrieval` 根据 `search_strategy` 调整 `candidate_top_k`（向量/关键词各自初选数）和 `coarse_top_k`（RRF 融合后送 reranker 的条数），将 `planned_top_k` 传为 `rerank_top_k`（rerank 后最终返回上限）。`target_tags` 传给检索器做 SQL 标签过滤。
 
 但 `search()` 内部有兜底：`candidate_top_k = max(candidate_top_k, coarse_top_k, rerank_top_k, SEARCH_FINAL_MAX_TOP_K)`，其中 `SEARCH_FINAL_MAX_TOP_K = 15`。因此 `candidate_top_k` 实际至少为 15，LLM 的调整只在 broad 策略且 `planned_top_k >= 8` 时才能超过 15。
 
@@ -356,7 +365,7 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 **经 search() 兜底后的实际值：**
 
-| 策略 | planned_top_k | candidate（向量/BM25各选） | coarse（送rerank） | rerank（最终上限） |
+| 策略 | planned_top_k | candidate（向量/关键词各选） | coarse（送rerank） | rerank（最终上限） |
 |---|---|---|---|---|
 | direct | 3 | 15 | 10 | 3 |
 | direct | 5 | 15 | 10 | 5 |
@@ -375,7 +384,7 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 | precise | 15 | 15 | 15 | 15 |
 
 **关键观察：**
-- `candidate_top_k`（向量/BM25 各自初选数）在 direct 和 precise 策略下始终被兜底到 15，LLM 无法影响；只有 broad 且 `planned_top_k >= 8` 时才超过 15
+- `candidate_top_k`（向量/关键词各自初选数）在 direct 和 precise 策略下始终被兜底到 15，LLM 无法影响；只有 broad 且 `planned_top_k >= 8` 时才超过 15
 - `coarse_top_k`（送 reranker 的条数）在 direct 下固定 10，broad 下随 `planned_top_k` 增长，precise 下从 8 起随 `planned_top_k` 增长
 - `rerank_top_k`（rerank 后最终返回上限）完全由 LLM 的 `planned_top_k` 决定，但实际返回条数还受断崖检测动态截断影响（见 5.3 节）
 
@@ -392,7 +401,11 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
   - `broad`：问题模糊或涉及多个主题，扩大范围
   - `precise`：问题涉及具体数值/条款，精确检索
 
-`difficulty` 和 `search_strategy` 是两个独立维度——一个简单但模糊的问题可能是 `difficulty=simple` + `search_strategy=broad`。`planned_top_k` 最终钳制在 2-15。LLM 失败时回退为 `planned_top_k=5` + `search_strategy=direct` + 原始 query 不改写。
+`difficulty` 和 `search_strategy` 是两个独立维度——一个简单但模糊的问题可能是 `difficulty=simple` + `search_strategy=broad`。`planned_top_k` 最终钳制在 2-15。LLM 失败时回退为 `planned_top_k=5` + `search_strategy=direct` + `target_tags=[]` + 原始 query 不改写。
+
+**标签匹配机制：**
+
+`node_plan_retrieval` 从 PG 加载用户和管理员知识库的文件描述和标签池（`SELECT DISTINCT file_name, metadata FROM kb_chunks WHERE ...`），LLM 基于指代消解后的 `rewritten_query` 从标签池中选择相关标签，输出 `target_tags`。标签为空表示不需要检索（闲聊/工具类问题），非空则用于检索 SQL 过滤。
 
 **指代消解（查询重写）机制：**
 
@@ -413,12 +426,12 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 ```
 入口 → 敏感检测(并行) + 场景检测(并行)
-     → node_route_intent（基于文件描述判断意图路由，Jev Noul + LLM兜底）
-          ├─ chitchat → node_generate（无检索上下文）→ END
-          ├─ tool → node_generate（无检索上下文，bind_tools）→ [tool_node → node_generate] → END
-          ├─ rag → node_faq_match →[命中? END]
-          │                        └→ node_plan_retrieval → node_retrieve → node_generate → END
-          └─ hybrid → (同 rag 链路，node_generate 始终根据 tool_attempts 决定是否 bind_tools)
+     → node_plan_retrieval（指代消解 + 标签匹配 + 检索参数规划，Fast LLM）
+           ├─ 知识库无文件 → node_no_kb_hit → END
+           ├─ target_tags 为空 → node_generate（闲聊/工具由LLM自主处理）→ [tool_node → node_generate] → END
+           └─ target_tags 非空 → node_faq_match →[命中? END]
+                                 └→ node_retrieve →[context为空? node_no_kb_hit → END]
+                                                   └→ node_generate → END
 
 注：敏感/场景检测在图外并行预判（非图节点），敏感命中则跳过主图返回固定话术，场景命中则注入 scene 字段。
 ```
@@ -427,12 +440,30 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 | 节点 | 职责 | 判断方式 | 输出 |
 |---|---|---|---|
-| `node_route_intent` | 基于文件描述判断是否需要检索 | Jev Noul(两个问题:needs_rag,needs_tool) + LLM兜底 | `route: rag/tool/chitchat/hybrid` + `file_descriptions` |
+| `node_plan_retrieval` | 指代消解 + 标签匹配 + 难度评估 + 检索参数规划 | Fast LLM输出JSON | `query`, `target_tags`, `planned_top_k`, `search_strategy` |
 | `node_faq_match` | BM25快速匹配FAQ | BM25Plus + KB语料IDF + 双阈值(coverage+ratio) | `mode: faq/rag` + 可能直接返回答案 |
-| `node_plan_retrieval` | 指代消解 + 难度评估 + 检索参数规划 | Fast LLM输出JSON | `query`, `planned_top_k`, `search_strategy`, `target_files` |
-| `node_retrieve` | 执行混合检索 | 向量+BM25+RRF+rerank+断崖检测 | `context`, `sources` |
-| `node_generate` | 生成最终回答 / 调用工具 | Main LLM + bind_tools | `final_answer` 或 `tool_calls` |
+| `node_retrieve` | 执行混合检索（标签过滤） | 向量+PG全文检索+RRF+rerank+断崖检测 | `context`, `sources` |
+| `node_no_kb_hit` | 知识库未命中兜底 | 知识库无文件 或 检索context为空时触发 | `final_answer`（固定话术，不经LLM） |
+| `node_generate` | 生成最终回答 / 调用工具 | Main LLM + bind_tools；`is_chitchat` = 无检索上下文 | `final_answer` 或 `tool_calls` |
 | `tool_node` | 执行工具调用 | LangGraph ToolNode | `ToolMessage` |
+
+**知识库未命中处理**：两种情况走 `node_no_kb_hit` 节点直接返回 `FALLBACK_NO_KB_HIT` 话术，不经过 LLM 生成——避免 LLM 凭自身知识"编造"回答：
+1. 知识库无文件（`file_descriptions` 为空）→ `node_plan_retrieval` 直接路由到 `node_no_kb_hit`
+2. 知识库有文件但检索结果为空（`target_tags` 非空，`node_retrieve` 返回 context 为空）→ `node_retrieve` 后路由到 `node_no_kb_hit`
+
+**ChatState 关键字段**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `query` | Optional[str] | LLM 指代消解后的查询，覆盖原始问题 |
+| `target_tags` | Optional[list] | LLM 从标签池选择的标签，为空表示不需要检索 |
+| `planned_top_k` | Optional[int] | LLM 规划的检索切片数量（2-15） |
+| `search_strategy` | Optional[str] | 检索策略：direct/broad/precise |
+| `context` | str | 检索到的上下文（兄弟块拼接） |
+| `mode` | str | 当前对话意图：rag/faq/sensitive/tool |
+| `scene` | Optional[str] | 场景判定结果（场景id） |
+
+**`node_generate` 闲聊判断**：`is_chitchat = not retrieved_context.strip()`——当 `target_tags` 为空（闲聊/工具路径）时，`node_plan_retrieval` 直接路由到 `node_generate`，此时无检索上下文，LLM system prompt 中对闲聊和 RAG 模式有不同的回答风格和追问生成规则。当 `target_tags` 非空但检索结果为空时，走 `node_no_kb_hit` 兜底，不会进入 `node_generate`。
 
 ### 6.3 预图并行判定
 
@@ -447,11 +478,25 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 ### 6.5 状态持久化
 
-- **LangGraph Checkpoint**：PostgresSaver + 连接池（min1/max10），对话状态跨请求恢复
+- **LangGraph Checkpoint**：PostgresSaver + 专用连接池（min1/max10，延迟 open），对话状态跨请求恢复
 - **对话历史**：每轮完成后写入 `myagent_conversations_history`（user消息 + assistant消息各一行）
 - **会话管理**：`myagent_sessions` 表，每用户上限10个，超出软删最早的
 
-### 6.6 SSE 流式输出
+### 6.6 PG 连接池架构
+
+所有 PG 访问统一使用 `psycopg_pool.ConnectionPool`，不再使用一次性 `psycopg.connect()`：
+
+| 模块 | 连接池参数 | 用途 |
+|---|---|---|
+| `generate_answer.py` | min1/max5, autocommit | 对话历史、会话管理、session API |
+| `generate_answer.py`（checkpointer） | min1/max10, 延迟 open | LangGraph checkpoint 读写 |
+| `retrieval_rerank.py` | min1/max5 | 向量+全文检索 |
+| `routes.py` | min1/max5 | 文件列表、上传任务、重切片 |
+| `file_tagging.py` | min1/max5 | 文件打标、描述加载 |
+
+连接池在模块级懒加载（首次调用时创建单例），`prepare_threshold=0` 避免 prepared statement 缓存问题。
+
+### 6.7 SSE 流式输出
 
 前端通过 `POST /chat/stream` 发起对话，后端返回 `StreamingResponse`（SSE格式）：
 
@@ -551,7 +596,7 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 
 ### 11.1 关键词统一
 
-知识库文档和用户查询共用一套 jieba 分词，避免关键词错位。BM25 的 IDF 从知识库全文语料计算，FAQ 的 IDF 也复用知识库语料（FAQ量少时自身IDF失真）。
+知识库文档和用户查询共用一套 jieba 分词，避免关键词错位。关键词塔使用 PG `content_tsv` + `ts_rank` 全文检索（jieba 分词写入 tsvector）。FAQ 的 IDF 复用知识库语料（FAQ量少时自身IDF失真）。
 
 ### 11.2 双语上下文前缀
 
@@ -579,15 +624,18 @@ rerank query 加 `[Bilingual context: Chinese and English content may coexist]` 
 
 ### 11.8 Jev Noul 概率判断
 
-敏感检测、场景检测、意图路由均优先用 TypeSafe Noul（概率输出+校准），超时/异常时降级为 LLM few-shot。Noul 延迟低、成本零，LLM兜底保证可用性。
+敏感检测、场景检测优先用 TypeSafe Noul（概率输出+校准），超时/异常时降级为 LLM few-shot。Noul 延迟低、成本零，LLM兜底保证可用性。
 
 ### 11.9 工具调用安全阀
 
 连续工具尝试上限3次，超过后停用工具、强制自然语言兜底——防止 LLM 陷入"调工具→失败→再调工具"的死循环。
 
-### 11.10 文件描述驱动的意图路由
+### 11.10 标签过滤驱动的意图路由
 
-LLM 在检索前先看到知识库文件描述列表，判断问题是否属于知识库覆盖范围——闲聊和工具类问题跳过检索，节省资源和延迟。
+`node_plan_retrieval` 作为图入口，从 PG 加载文件描述和标签池，LLM 在一次调用中完成指代消解 → 标签匹配 → 检索参数规划。三种分流路径：
+- 知识库无文件 → `node_no_kb_hit`（兜底话术，不经 LLM）
+- `target_tags` 为空 → `node_generate`（闲聊/工具，LLM 自主处理）
+- `target_tags` 非空 → FAQ 匹配 → 检索（SQL 按 `metadata->'tags' ?| array[...]` 过滤）→ 检索为空走 `node_no_kb_hit`，非空走 `node_generate`
 
 ### 11.11 Docker VirtioFS 写入保护
 
@@ -595,99 +643,22 @@ macOS Docker Desktop 的 VirtioFS/fakeowner 文件系统在覆盖写入已存在
 
 ---
 
-## 十二、死代码清单
+## 十二、环境配置
 
-Agentic RAG 升级（计划 1）执行时已清理大部分死代码。以下为最终状态：
+所有配置通过环境变量管理，`.env.example` 为模板。关键变量分组：
 
-| # | 文件 | 内容 | 状态 | 说明 |
-|---|---|---|---|---|
-| 1 | `generate_answer.py` | `query_rewrite` 函数 | ✅ 已删除 | 已被 `node_plan_retrieval` 替代 |
-| 2 | `generate_answer.py` | `_detect_language` 函数 | ✅ 保留 | **正在使用**（`_build_initial_state` 中调用，检测用户提问语种） |
-| 3 | `generate_answer.py` | `import operator` | ✅ 已删除 | — |
-| 4 | `generate_answer.py` | `from langgraph.graph import MessagesState` | ✅ 已删除 | — |
-| 5 | `generate_answer.py` | `AnyMessage` import | ✅ 已删除 | — |
-| 6 | `generate_answer.py` | `context_config` 字段 | ✅ 已删除 | — |
-| 7 | `generate_answer.py` | `context_mode` 字段 | ✅ 已删除 | — |
-| 8 | `generate_answer.py` | `image` 字段 | ✅ 已删除 | — |
-| 9 | `retrieval_rerank.py` | `batch_search` 方法 | ✅ 已删除 | — |
-| 10 | `retrieval_rerank.py` | `_get_conn` + `_return_conn` | ✅ 已删除 | — |
-| 11 | `generate_answer.py` | `NODE_HINTS["query_rewrite"]` | ✅ 已删除 | — |
-| 12 | `sso_did/auth.py` | `get_current_user_optional` | ✅ 已删除 | 从未被调用 |
-| 13 | `table_data/user_profile.py` | 空文件 | ✅ 保留 | 预留扩展 |
-
----
-
-## 十三、可优化之处
-
-### 13.1 子块重写与嵌入的顺序问题
-
-**现状**：`rewrite_chunks_with_coref` 在 `build_semantic_chunks`（含嵌入）之后执行。即嵌入用的是重写前的文本，但 `text_hash` 更新为重写后的。这意味着向量空间和文本空间不一致——检索时用 query 嵌入匹配的是旧文本的向量，但返回的是新文本。
-
-**建议**：将重写移到嵌入之前，或重写后重新嵌入受影响的子块。
-
-### 13.2 BM25 索引全量重建
-
-**现状**：每次文件上传/删除都 `invalidate_kb_bm25()`，下次检索时全量重建（加载所有 chunk 的 child_content）。文件多时重建耗时可观。
-
-**建议**：改为增量更新——上传时追加文档到索引，删除时移除对应文档。或改用 PG 的 `tsvector` + `ts_query` 做关键词检索（已有 `content_tsv` 索引但未在检索中使用）。
-
-### 13.3 PG 连接管理
-
-**现状**：多处使用 `psycopg.connect()` 一次性连接（_pg_conn, _kb_conn, _task_conn），每次操作开关一次连接。高频操作（如文件描述加载、对话历史写入）的连接开销不可忽略。
-
-**建议**：统一使用 `ConnectionPool`，像 checkpointer 那样管理连接池。
-
-### 13.4 .env.example 过时
-
-**现状**：`.env.example` 仍使用旧的 `PG_HRSSC_*` 前缀命名，与实际 `.env` 的 `PG_MYAGENT_*` 不一致。缺少 `PG_MYAGENT_SESSIONS_TABLE`、`ADMIN_UID` 等新变量。`EMBEDDING_DIM` 示例值 4096 与实际 1024 不符。
-
-**建议**：以当前 `.env` 为基准更新 `.env.example`。
-
-### 13.5 content_tsv 索引未用于检索
-
-**现状**：`kb_chunks` 表有 `content_tsv`（TSVECTOR）和 GIN 索引，入库时用 jieba 分词填充。但检索时关键词塔用的是内存 BM25，完全没有用到 PG 的全文检索能力。
-
-**建议**：可以将关键词塔改为 PG `ts_query` + `ts_rank`，省去内存 BM25 索引的构建和维护成本；或者保留 BM25 但利用 content_tsv 做 PG 侧的预过滤。
-
-### 13.6 target_files 未被消费
-
-**现状**：`node_plan_retrieval` 输出 `target_files`（预估命中文件），存入 state 但没有任何节点读取。注释说"未来用于标签过滤"。
-
-**建议**：要么实现标签过滤（`WHERE metadata->'tags' ?| target_tags`），要么暂时移除该字段避免无用的 LLM token 消耗。
-
-### 13.7 重新切片不保留文件描述
-
-**现状**：`_background_rechunk` 传 `file_description=""`，走 LLM 打标分支。如果文件之前有手填描述，`has_manual_description` 会保护它——但如果之前是 LLM 自动打标的，重新切片会重新打标，可能覆盖之前的描述。
-
-**建议**：重新切片前先读取已有 metadata，如果是 `llm_auto` 则可以选择保留或重新生成，而不是无条件重新生成。
-
-### 13.8 前端无框架的维护成本
-
-**现状**：4400+行原生 JS + HTML 单文件，无组件化、无状态管理、无构建工具。
-
-**建议**：如果项目持续迭代，考虑迁移到轻量框架（如 Alpine.js + 模板拆分，或 Vue 单文件），降低维护成本。当前规模尚可接受，但每次改动都需要全局搜索定位。
-
-### 13.9 会话标题生成时机
-
-**现状**：首轮对话后异步生成标题（`_generate_session_title`），但如果生成失败，标题永远为空。
-
-**建议**：增加重试或在用户首次查看会话列表时懒生成。
-
-### 13.10 多worker下的BM25索引一致性
-
-**现状**：BM25 索引是进程级单例。在 `--workers 4` 的生产模式下，每个 worker 有自己的 BM25 索引。文件上传后 `invalidate_kb_bm25()` 只失效当前 worker 的索引，其他 worker 的索引仍然是旧的。
-
-**建议**：使用 Redis pub/sub 或 PG LISTEN/NOTIFY 跨 worker 通知索引失效；或改用 PG 侧全文检索（天然跨 worker 一致）。
-
-### 13.11 parse_result 目录名用 stem 去后缀，同 stem 不同后缀文件会撞车
-
-**现状**：解析器 `_office_output_dir` 用 `Path(file_path).stem.replace(" ", "_")` 做 `parse_result` 目录名，丢弃了文件后缀。如果同一用户上传了 `data.xlsx` 和 `data.pdf`，两个文件的 parse_result 目录都是 `parse_result/{uid}/data/`，后者会覆盖前者的 `merged.md`。
-
-已统一用 `file_name`（用户修改后的展示名）的 stem 做 parse_result 目录名，upload_kb、parse_result、PG 三处命名一致。`original_name` 仅保留在 PG 中做审计，不参与路径查找。旧数据和兼容旧目录结构的逻辑已清除。
-
-**影响范围**：
-- `parse_file.py` `_office_output_dir` — 用 `file_path` 的 stem
-- `miner_u_parse.py` — 用 `pdf_path` 的 stem
-- `routes.py` `_has_parse_result` / `_merged_md_path` / `_read_merged_md` — 用 `file_name` 的 stem
-
-**建议**：如果未来文件量增大或撞车频发，将目录名改为 `stem + ext`（如 `data.xlsx` 而非 `data`），同步修改所有引用点。
+| 分组 | 变量 | 说明 |
+|---|---|---|
+| 运行目录 | `WORK_PATH` | 容器内项目根目录（`/app`） |
+| LLM | `BASE_URL`, `ACCESSCODE` | OpenAI 兼容 API 地址和密钥 |
+| 模型 | `TEXT_MODEL`, `VLM_MODEL`, `FAST_MODEL` | 文本/多模态/快速模型名 |
+| Embedding | `EMBEDDING_MODEL`, `EMBEDDING_DIM` | 嵌入模型和维度（1024） |
+| Rerank | `RERANK_MODEL`, `RERANK_BASE_URL` | 重排序模型 |
+| TypeSafe | `TYPESAFE_API_KEY` | Jev Noul/Choice API key |
+| PG | `PG_HOST`, `PG_PORT`, `PG_DATABASE`, `PG_USER`, `PG_PASSWORD` | PostgreSQL 连接 |
+| PG 表名 | `PG_MYAGENT_KB_TABLE`, `PG_MYAGENT_SESSIONS_TABLE` 等 | 业务表名 |
+| Redis | `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD` | Session 存储 |
+| 鉴权 | `ADMIN_UID`, `ADMIN_PASSWORD`, `SESSION_TTL_HOURS` | 管理员和会话配置 |
+| FAQ 阈值 | `FAQ_COVERAGE_THRESHOLD`, `FAQ_RATIO_THRESHOLD` | FAQ 匹配阈值 |
+| 兜底话术 | `FALLBACK_*`, `ABORT_REPLY`, `SENSITIVE_REPLY` | 各类异常话术（LLM错误/系统错误/超时/空响应/未命中KB/工具失败/中止/敏感） |
+| 前端提示 | `NODE_HINTS`, `TOOL_QUERY_HINTS`, `WAITING_TIPS` | SSE 等待提示文案（JSON） |

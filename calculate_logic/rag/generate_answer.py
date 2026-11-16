@@ -130,11 +130,10 @@ class ChatState(TypedDict):
     language: Optional[str]  # 用户提问语种（中文/英文...）
     scene: Optional[str]  # 场景判定结果（场景id），入口并行判定后注入，供 node_generate 套用场景模板
     scenes: Optional[list]  # 场景模板列表（入口一次性加载，供 node_generate 查找命中场景的模板内容）
-    route: Optional[str]  # 意图路由结果 (rag/tool/chitchat/hybrid)
-    file_descriptions: Optional[list]  # 该用户的文件描述列表，供意图路由和检索规划使用
+    file_descriptions: Optional[list]  # 该用户的文件描述列表，供检索规划使用
     planned_top_k: Optional[int]  # LLM 规划的检索切片数量
     search_strategy: Optional[str]  # 检索策略 (direct/broad/precise)
-    target_files: Optional[list]  # 预估命中文件（未来用于标签过滤）
+    target_tags: Optional[list]  # LLM 规划的命中标签列表，用于检索 SQL 过滤；为空表示不需要检索
 
 # ================= 封装Langggraph工具 ===============
 tools = [query_leave_quota, query_leave_record, query_working_time, query_personal_info]
@@ -148,7 +147,6 @@ _DEFAULT_TOOL_QUERY_HINTS = {
     "query_personal_info": "正在查询您的个人信息",
 }
 _DEFAULT_NODE_HINTS = {
-    "node_route_intent": "正在分析问题方向",
     "node_plan_retrieval": "正在规划检索策略",
     "node_retrieve": "正在检索知识库",
     "node_faq_match": "正在匹配常见问题",
@@ -192,14 +190,16 @@ def _pg_dsn() -> str:  # 构建PG连接密钥串
         f"dbname={config['PG_DATABASE']} user={config['PG_USER']} "
         f"password={config['PG_PASSWORD']}"
     )
-def _pg_conn():  # 构建PG客户端
-    return psycopg.connect(
-        host=config["PG_HOST"],
-        port=int(config["PG_PORT"]),
-        dbname=config["PG_DATABASE"],
-        user=config["PG_USER"],
-        password=config["PG_PASSWORD"],
-    )
+_pg_pool = None
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        _pg_pool = ConnectionPool(
+            conninfo=_pg_dsn(),
+            min_size=1, max_size=5, open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+    return _pg_pool
 def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  # 历史对话入库字段
                               ai_msg: str, mode: str, uid: str = "anonymous",
                               sources: list | None = None,
@@ -209,7 +209,7 @@ def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  #
                               completion_token: int | None = None,
                               total_token: int | None = None) :
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             # 依次存入user和assistant的对话内容
             conn.execute(
                 f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'user', %s, %s, %s, NULL, NULL, NULL)",
@@ -261,125 +261,38 @@ def _clean_history_messages(history_messages: list[BaseMessage]) -> list[str]:
     return dialogue_history
 
 
-# ================= 意图路由（Jev Noul + LLM 兜底，基于文件描述判断是否需要检索） =================
-async def node_route_intent(state: ChatState) -> ChatState:
-    user_query = state["messages"][-1].content if state.get("messages") else ""
+# ================= 检索策略规划（指代消解 + 标签匹配 + 检索参数决策，图入口节点） =================
+async def node_plan_retrieval(state: ChatState) -> ChatState:
+    last_message = state["messages"][-1].content if state.get("messages") else ""
     uid = (state.get("user") or {}).get("uid", "") if isinstance(state.get("user"), dict) else ""
 
     from calculate_logic.rag.file_tagging import load_file_descriptions, ADMIN_UID
     file_descriptions = load_file_descriptions(uid, ADMIN_UID)
 
     if not file_descriptions:
-        logger.info("[RouteIntent] 无文件描述，默认走 rag")
-        return {"route": "rag", "file_descriptions": []}
+        logger.info("[PlanRetrieval] 无文件描述，不需要检索")
+        return {"query": last_message, "planned_top_k": 5, "search_strategy": "direct",
+                "target_tags": [], "file_descriptions": []}
+
+    # 汇总所有标签
+    all_tags = sorted(set(t for f in file_descriptions for t in f.get("tags", []) if t))
+    tags_text = ", ".join(all_tags) if all_tags else "（无标签）"
+
+    history_messages = _clean_history_messages(state.get("messages", []))[-(rewrite_n * 2 + 1):-1]
+    history_text = "\n".join(history_messages) if history_messages else "（无）"
 
     file_list_text = "\n".join(
         f"- {f['file_name']}: {f['description']}"
         for f in file_descriptions
     )
 
-    # 优先用 Jev Noul 判断
-    try:
-        client = get_jev_client()
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.system_one,
-                state={
-                    "user_query": user_query,
-                    "file_descriptions": file_list_text,
-                },
-                questions={
-                    "needs_rag": Noul(
-                        instructions="`user_query` 的问题能否从 `file_descriptions` 描述的文件中找到答案？文件描述涵盖的主题与用户问题相关则为是。",
-                    ),
-                    "needs_tool": Noul(
-                        instructions="`user_query` 是否需要查询用户的个人动态数据（假期额度、请假记录、工时、个人信息）？",
-                    ),
-                },
-            ),
-            timeout=10,
-        )
-        rag_noul = result.nouls["needs_rag"].noul
-        tool_noul = result.nouls["needs_tool"].noul
-
-        if rag_noul > 0.5 and tool_noul > 0.5:
-            route = "hybrid"
-        elif rag_noul > 0.5:
-            route = "rag"
-        elif tool_noul > 0.5:
-            route = "tool"
-        else:
-            route = "chitchat"
-
-        logger.info(f"[RouteIntent] Jev rag={rag_noul:.4f} tool={tool_noul:.4f} -> {route}")
-        return {"route": route, "file_descriptions": file_descriptions}
-    except asyncio.TimeoutError:
-        logger.warning("[RouteIntent] Jev 超时(10s)，降级为 LLM 判断")
-    except Exception as e:
-        logger.warning(f"[RouteIntent] Jev 不可用，降级为 LLM 判断: {e}")
-
-    # LLM 兜底
-    prompt = f"""判断用户问题的意图路由。
-
-【知识库文件】
-{file_list_text}
-
-【用户问题】
-{user_query}
-
-【判断标准】
-- rag: 问题属于上述知识库文件涵盖的主题
-- tool: 需要查询个人动态数据（假期、工时、个人信息）
-- chitchat: 闲聊/寒暄/感谢/情绪安抚
-- hybrid: 既需要知识库又需要工具
-
-只输出一个词：rag / tool / chitchat / hybrid"""
-
-    try:
-        llm = get_fast_llm_client()
-        response = await asyncio.wait_for(
-            llm.ainvoke(
-                [HumanMessage(content=prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 10},
-                config={"tags": ["route_intent"]},
-            ),
-            timeout=10,
-        )
-        route = response.content.strip().lower()
-        if route not in ("rag", "tool", "chitchat", "hybrid"):
-            route = "rag"
-        log_token_usage("route_intent", response, config.get("FAST_MODEL", ""))
-        logger.info(f"[RouteIntent] LLM 兜底 -> {route}")
-        return {"route": route, "file_descriptions": file_descriptions}
-    except Exception as e:
-        logger.warning(f"[RouteIntent] LLM 兜底也失败，默认走 rag: {e}")
-        return {"route": "rag", "file_descriptions": file_descriptions}
-
-
-def route_intent(state: ChatState) -> Literal["node_generate", "node_faq_match"]:
-    """意图路由条件边：chitchat/tool 直走 generate，rag/hybrid 先走 FAQ 匹配。"""
-    intent = state.get("route", "rag")
-    if intent in ("chitchat", "tool"):
-        return "node_generate"
-    return "node_faq_match"
-
-# ================= 检索策略规划（替代 query_rewrite，增加难度评估和检索参数决策） =================
-async def node_plan_retrieval(state: ChatState) -> ChatState:
-    last_message = state["messages"][-1].content if state.get("messages") else ""
-    file_descriptions = state.get("file_descriptions", [])
-
-    history_messages = _clean_history_messages(state.get("messages", []))[-(rewrite_n * 2 + 1):-1]
-    history_text = "\n".join(history_messages) if history_messages else "（无）"
-
-    file_list_text = "\n".join(
-        f"- {f['file_name']}: {f['description']} [标签: {', '.join(f.get('tags', []))}]"
-        for f in file_descriptions
-    ) if file_descriptions else "（无文件描述）"
-
     prompt = f"""你是一个检索策略规划器。请分析用户问题并制定检索策略。
 
 【知识库文件】
 {file_list_text}
+
+【可用标签】
+{tags_text}
 
 【历史对话】
 {history_text}
@@ -387,21 +300,21 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
 【用户当前问题】
 {last_message}
 
-请完成以下任务：
+请完成以下任务（按顺序）：
 1. 如果是追问（有代词/省略），先做指代消解，把问题补全为独立完整的问题。注意：历史对话中用户的提问是改写的主要依据，AI的回答仅作为辅助参考，不要让AI的回答内容主导改写方向
-2. 评估问题难度：simple(单一事实) / moderate(需上下文关联) / complex(多条件/多步骤)
-3. 决定检索切片数量：
+2. 基于第1步的改写结果（不是原始问题），从【可用标签】中选择与问题相关的标签。如果没有标签相关，返回空列表——这意味着不需要检索知识库
+3. 评估问题难度：simple(单一事实) / moderate(需上下文关联) / complex(多条件/多步骤)
+4. 决定检索切片数量：
    - simple: 3-5
    - moderate: 5-8
    - complex: 8-12
-4. 选择检索策略：
+5. 选择检索策略：
    - direct: 问题明确，直接检索
    - broad: 问题模糊或涉及多个主题，扩大范围
    - precise: 问题涉及具体数值/条款，精确检索
-5. 预估可能命中的文件（基于文件描述，可为空）
 
 输出JSON，格式：
-{{"rewritten_query": "...", "difficulty": "simple", "reasoning": "...", "planned_top_k": 5, "search_strategy": "direct", "target_files": ["文件名"]}}
+{{"rewritten_query": "...", "target_tags": ["标签1", "标签2"], "difficulty": "simple", "reasoning": "...", "planned_top_k": 5, "search_strategy": "direct"}}
 
 只输出JSON，不要其他内容。"""
 
@@ -430,19 +343,40 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
         search_strategy = plan.get("search_strategy", "direct")
         if search_strategy not in ("direct", "broad", "precise"):
             search_strategy = "direct"
-        target_files = plan.get("target_files", [])
+        target_tags = plan.get("target_tags", [])
+        if not isinstance(target_tags, list):
+            target_tags = []
 
-        logger.info(f"[PlanRetrieval] query='{rewritten_query[:50]}' difficulty={plan.get('difficulty')} top_k={planned_top_k} strategy={search_strategy}")
+        logger.info(f"[PlanRetrieval] query='{rewritten_query[:50]}' tags={target_tags} difficulty={plan.get('difficulty')} top_k={planned_top_k} strategy={search_strategy}")
 
         return {
             "query": rewritten_query,
             "planned_top_k": planned_top_k,
             "search_strategy": search_strategy,
-            "target_files": target_files,
+            "target_tags": target_tags,
+            "file_descriptions": file_descriptions,
         }
     except Exception as e:
         logger.error(f"[PlanRetrieval] 规划失败，回退基础改写: {e}")
-        return {"query": last_message, "planned_top_k": 5, "search_strategy": "direct", "target_files": []}
+        return {"query": last_message, "planned_top_k": 5, "search_strategy": "direct",
+                "target_tags": [], "file_descriptions": file_descriptions}
+
+
+def route_plan_retrieval(state: ChatState) -> Literal["node_generate", "node_faq_match", "node_no_kb_hit"]:
+    """检索规划条件边：
+    - file_descriptions 为空 → 知识库无文件，走未命中兜底
+    - target_tags 为空 → 不需要检索，直走 generate（闲聊/工具）
+    - target_tags 非空 → 先走 FAQ 匹配
+    """
+    file_descriptions = state.get("file_descriptions", [])
+    if not file_descriptions:
+        logger.info("[RoutePlan] 知识库无文件，走未命中兜底")
+        return "node_no_kb_hit"
+    target_tags = state.get("target_tags", [])
+    if target_tags:
+        return "node_faq_match"
+    logger.info("[RoutePlan] target_tags 为空，跳过检索直走生成")
+    return "node_generate"
 
 # ================= 敏感话题检测（Jev Noul，LLM 兜底，与主线并行） =================
 # 命中敏感话题时不走 RAG 链路，而是走独立固定话术分支（mode=sensitive）。
@@ -454,6 +388,8 @@ FALLBACK_LLM_ERROR = os.getenv("FALLBACK_LLM_ERROR", "抱歉，我暂时无法�
 FALLBACK_SYSTEM_ERROR = os.getenv("FALLBACK_SYSTEM_ERROR", "抱歉，系统暂时遇到问题，请稍后再试。").strip()
 FALLBACK_TIMEOUT = os.getenv("FALLBACK_TIMEOUT", "抱歉，系统响应超时，请稍后再试。").strip()
 FALLBACK_EMPTY_RESPONSE = os.getenv("FALLBACK_EMPTY_RESPONSE", "抱歉，我暂时没有生成有效回答，请尝试换个问法或稍后再试。").strip()
+FALLBACK_NO_KB_HIT = os.getenv("FALLBACK_NO_KB_HIT", "抱歉，当前知识库中没有找到与您问题相关的内容，我不能凭空捏造。").strip()
+FALLBACK_TOOL_ERROR = os.getenv("FALLBACK_TOOL_ERROR", "相关查询暂时不可用，请稍后再试。").strip()
 ABORT_REPLY = os.getenv("ABORT_REPLY", "回答已中止。").strip()
 async def _judge_sensitive(query: str) -> str:
     if not query or not query.strip():
@@ -531,7 +467,7 @@ def _load_scenes() -> list[dict]:
     # 从 PG 加载全部启用的场景模板,表极小（个位数行），同步查库耗时毫秒级。
     # 每次查库保证多 worker 数据完全一致，无需缓存。
     try:
-        with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        with _get_pg_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
                 f"SELECT scene_id, name, trigger, answer_template, answer_mode, followup_prompt "
                 f"FROM {SCENE_TABLE} ORDER BY id"
@@ -656,7 +592,7 @@ class _FaqBM25(BM25Plus):          # 继承 rank_bm25 库的 BM25Plus
 
 def _load_faq() -> tuple[list[str], list[str], BM25Plus]:  # 从 PG 加载全部 FAQ，并用 kb 全量语料的 IDF 构建 BM25 索引
     try:
-        with _pg_conn() as conn, conn.cursor() as cur:
+        with _get_pg_pool().connection() as conn, conn.cursor() as cur:
             cur.execute(f"SELECT question, answer FROM {FAQ_TABLE} ORDER BY id")
             rows = cur.fetchall()
             cur.execute(f"SELECT parent_content FROM {os.getenv('PG_MYAGENT_KB_TABLE', '')} WHERE parent_content IS NOT NULL")
@@ -768,17 +704,21 @@ async def node_faq_match(state: ChatState) -> ChatState:
 
 # ================= RAG节点 —— 检索知识库chunk =================
 retriever = PgHybridRetriever.from_env()
-async def do_retrieval(query: str, uid: str = "", top_k: int = 5, strategy: str = "direct") -> dict:
+async def do_retrieval(query: str, uid: str = "", top_k: int = 5, strategy: str = "direct",
+                      target_tags: list = None) -> dict:
     if strategy == "broad":
         result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
                                          candidate_top_k=max(15, top_k * 2),
-                                         coarse_top_k=max(12, top_k * 2))
+                                         coarse_top_k=max(12, top_k * 2),
+                                         target_tags=target_tags)
     elif strategy == "precise":
         result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
                                          candidate_top_k=max(8, top_k),
-                                         coarse_top_k=max(8, top_k))
+                                         coarse_top_k=max(8, top_k),
+                                         target_tags=target_tags)
     else:
-        result = await retriever.search(query, uid=uid, rerank_top_k=top_k)
+        result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
+                                         target_tags=target_tags)
     # context 使用命中子块 + 同父块中前后各1个子块（共3个子块），节省 LLM 输入长度
     # sources 保留完整父块，供前端展示来源和数据库持久化
     context_parts = []
@@ -800,10 +740,12 @@ async def node_retrieve(state: ChatState) -> ChatState:
     uid = (state.get("user") or {}).get("uid", "") if isinstance(state.get("user"), dict) else ""
     planned_top_k = state.get("planned_top_k") or 5
     search_strategy = state.get("search_strategy", "direct")
-    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}' uid={uid} top_k={planned_top_k} strategy={search_strategy}")
+    target_tags = state.get("target_tags") or []
+    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}' uid={uid} top_k={planned_top_k} strategy={search_strategy} tags={target_tags}")
 
     try:
-        context, sources = await do_retrieval(query, uid=uid, top_k=planned_top_k, strategy=search_strategy)
+        context, sources = await do_retrieval(query, uid=uid, top_k=planned_top_k, strategy=search_strategy,
+                                              target_tags=target_tags)
     except Exception as e:
         logger.error(f"[Retrieve] 检索失败，返回空结果: {e}")
         context, sources = "", []
@@ -812,6 +754,26 @@ async def node_retrieve(state: ChatState) -> ChatState:
     return {
         "context": context,
         "sources": sources
+    }
+
+# ================= 检索结果条件边：检索为空 → 返回未命中话术，非空 → 生成回答 =================
+def route_retrieve_result(state: ChatState) -> Literal["node_generate", "node_no_kb_hit"]:
+    """检索后 context 为空 → 返回未命中话术，跳过生成；非空 → 走生成。"""
+    context = state.get("context", "")
+    if not context.strip():
+        logger.info("[RouteRetrieve] 检索结果为空，返回未命中话术")
+        return "node_no_kb_hit"
+    logger.info("[RouteRetrieve] 检索结果非空，进入生成")
+    return "node_generate"
+
+# ================= 未命中知识库的终端节点 =================
+async def node_no_kb_hit(state: ChatState) -> ChatState:
+    """检索未命中时直接返回兜底话术，不经过 LLM 生成。"""
+    logger.info("[NoKbHit] 知识库未命中，返回兜底话术")
+    return {
+        "final_answer": FALLBACK_NO_KB_HIT,
+        "messages": [AIMessage(content=FALLBACK_NO_KB_HIT)],
+        "mode": "rag",
     }
 
 # ================= 辅助函数 ——  提取最新的ToolMessage，填充至生成回答的提示词中 =================
@@ -861,8 +823,7 @@ def _parse_related_questions(text: str, max_count: int = 3) -> tuple[str, list[s
 # ================= RAG节点 —— 生成最终回答 =================
 async def node_generate(state: ChatState):
     retrieved_context = state.get("context", "")
-    route = state.get("route", "rag")
-    is_chitchat = (route == "chitchat")
+    is_chitchat = not retrieved_context.strip()  # 无检索上下文 = 闲聊/工具路径
     history_messages = _clean_history_messages(state["messages"])[-(generate_n * 2 + 1):-1]
     history_text = "\n".join(history_messages)
     tool_messages = _extract_tool_message(state["messages"])
@@ -1084,42 +1045,46 @@ async def node_generate(state: ChatState):
 builder = StateGraph(ChatState)
 
 # 第二步：向图中添加所有节点
-builder.add_node("node_route_intent",   node_route_intent)      # 意图路由（基于文件描述判断是否需要检索）
+builder.add_node("node_plan_retrieval", node_plan_retrieval)    # 检索策略规划（指代消解+标签匹配+检索参数决策，图入口）
 builder.add_node("node_faq_match",      node_faq_match)         # FAQ快速匹配（BM25）
-builder.add_node("node_plan_retrieval", node_plan_retrieval)    # 检索策略规划（指代消解+难度评估+检索参数决策）
 builder.add_node("node_retrieve",       node_retrieve)          # 执行检索
+builder.add_node("node_no_kb_hit",      node_no_kb_hit)         # 检索未命中兜底（返回话术，不经LLM）
 builder.add_node("tool_node",           tool_node)              # 工具节点，条件触发
 builder.add_node("node_generate",       node_generate)          # 生成回答（终端）
 
 # 第三步：设置图的入口节点
-builder.set_entry_point("node_route_intent")
+builder.set_entry_point("node_plan_retrieval")
 
 # 第四步：定义节点之间的边（数据流向）
-# 意图路由条件边：chitchat/tool 直走 generate，rag/hybrid 先走 FAQ 匹配
+# 检索规划条件边：知识库无文件 → 未命中兜底；target_tags 为空 → 闲聊/工具直走 generate；非空 → 先走 FAQ 匹配
 builder.add_conditional_edges(
-    "node_route_intent",
-    route_intent,
-    {"node_generate": "node_generate", "node_faq_match": "node_faq_match"},
+    "node_plan_retrieval",
+    route_plan_retrieval,
+    {"node_generate": "node_generate", "node_faq_match": "node_faq_match", "node_no_kb_hit": "node_no_kb_hit"},
 )
 
-# FAQ 匹配：命中 → END，未命中 → 检索策略规划
-def route_faq_match(state: ChatState) -> Literal["node_plan_retrieval", "__end__"]:
-    """FAQ 命中（mode=faq）→ END；否则走检索策略规划。"""
+# FAQ 匹配：命中 → END，未命中 → 检索
+def route_faq_match(state: ChatState) -> Literal["node_retrieve", "__end__"]:
+    """FAQ 命中（mode=faq）→ END；否则走检索。"""
     if state.get("mode") == "faq":
         logger.info("[RouteFaq] FAQ命中，进入结束节点")
         return END
-    logger.info("[RouteFaq] FAQ未命中，走检索策略规划")
-    return "node_plan_retrieval"
+    logger.info("[RouteFaq] FAQ未命中，走检索")
+    return "node_retrieve"
 
 builder.add_conditional_edges(
     "node_faq_match",
     route_faq_match,
-    {"node_plan_retrieval": "node_plan_retrieval", END: END},
+    {"node_retrieve": "node_retrieve", END: END},
 )
 
-# RAG链路：检索策略规划 → 检索 → 生成
-builder.add_edge("node_plan_retrieval", "node_retrieve")
-builder.add_edge("node_retrieve", "node_generate")
+# RAG链路：检索 → 条件边（context为空 → 未命中兜底，非空 → 生成）
+builder.add_conditional_edges(
+    "node_retrieve",
+    route_retrieve_result,
+    {"node_generate": "node_generate", "node_no_kb_hit": "node_no_kb_hit"},
+)
+builder.add_edge("node_no_kb_hit", END)
 
 # 工具循环：生成节点判断是否需要调用工具
 builder.add_conditional_edges("node_generate",
@@ -1197,11 +1162,10 @@ def _build_initial_state(session_id: str, message: str, turn_count: int, user: d
         "language": _detect_language(message),
         "scene": None,
         "scenes": None,
-        "route": None,
         "file_descriptions": None,
         "planned_top_k": None,
         "search_strategy": None,
-        "target_files": None,
+        "target_tags": None,
     }
 
 
@@ -1259,7 +1223,7 @@ async def chat_stream(
             start_time = datetime.now(timezone.utc)
             yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'turn_count': turn_count, 'tips': WAITING_TIPS, 'tips_interval': WAITING_TIPS_INTERVAL})}\n\n"
             # 判定阶段先发 thinking 提示，避免 start 后到主图启动间出现无反馈空窗
-            yield f"data: {json.dumps({'type': 'thinking', 'hint': NODE_HINTS.get('node_route_intent', '收到您的问题')})}\n\n"
+            yield f"data: {json.dumps({'type': 'thinking', 'hint': NODE_HINTS.get('node_plan_retrieval', '收到您的问题')})}\n\n"
 
             # ── 首轮并行生成 session 标题（与主图/敏感判定同时进行，不阻塞回答流）──
             title_task = None
@@ -1394,6 +1358,16 @@ async def chat_stream(
                                     await q.put(f"data: {json.dumps({'type': 'content', 'content': faq_answer})}\n\n")
                                     await q.put(f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n")
                                     _persist_turn(ctx)
+
+                            elif node_name == "node_no_kb_hit":
+                                # 检索未命中兜底：直接下发话术后发 done
+                                if isinstance(output, dict):
+                                    ctx["final_mode"] = "rag"
+                                    no_kb_answer = output.get("final_answer", FALLBACK_NO_KB_HIT)
+                                    ctx["full_answer"] = no_kb_answer
+                                    await q.put(f"data: {json.dumps({'type': 'content', 'content': no_kb_answer})}\n\n")
+                                    await q.put(f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n")
+                                    _persist_turn(ctx)
                     await q.put(QUEUE_END)
                 except asyncio.CancelledError:
                     raise
@@ -1506,7 +1480,7 @@ async def chat_stream(
             if title_task is not None:
                 try:
                     title = await title_task
-                    with _pg_conn() as conn:
+                    with _get_pg_pool().connection() as conn:
                         conn.execute(
                             f"UPDATE {SESSIONS_TABLE} SET title = %s "
                             f"WHERE uid = %s AND session_id = %s AND deleted = false AND title = ''",
@@ -1554,7 +1528,7 @@ async def conversation_judgement(session_id: str = Body(...),
         return {"success": False, "error": "turn_count 必须为正整数"}
     uid = current_user.uid
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             if detail and judgement == "dislike":
                 cur = conn.execute(
                     f"UPDATE {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} "
@@ -1600,11 +1574,10 @@ async def session_clear(session_id: str = Body(...), current_user: TokenData = D
         "language": "中文",
         "scene": None,
         "scenes": None,
-        "route": None,
         "file_descriptions": None,
         "planned_top_k": None,
         "search_strategy": None,
-        "target_files": None,
+        "target_tags": None,
     }
     
     await graph.aupdate_state(config, empty_state)
@@ -1635,7 +1608,7 @@ MAX_SESSIONS_PER_USER = 10
 
 def _create_session_row(uid: str, session_id: str) -> None:
     """在 myagent_sessions 表中插入新 session 行。"""
-    with _pg_conn() as conn:
+    with _get_pg_pool().connection() as conn:
         conn.execute(
             f"INSERT INTO {SESSIONS_TABLE} (uid, session_id) VALUES (%s, %s) "
             f"ON CONFLICT (uid, session_id) DO NOTHING",
@@ -1645,7 +1618,7 @@ def _create_session_row(uid: str, session_id: str) -> None:
 
 def _verify_session_owner(uid: str, session_id: str) -> bool:
     """校验 session 是否属于该 uid 且未删除。"""
-    with _pg_conn() as conn:
+    with _get_pg_pool().connection() as conn:
         cur = conn.execute(
             f"SELECT 1 FROM {SESSIONS_TABLE} "
             f"WHERE uid = %s AND session_id = %s AND deleted = false",
@@ -1655,7 +1628,7 @@ def _verify_session_owner(uid: str, session_id: str) -> bool:
 
 def _enforce_session_limit(uid: str) -> None:
     """超10个时软删最旧的 session（含 checkpoint 清除）。"""
-    with _pg_conn() as conn:
+    with _get_pg_pool().connection() as conn:
         cur = conn.execute(
             f"SELECT session_id FROM {SESSIONS_TABLE} "
             f"WHERE uid = %s AND deleted = false ORDER BY last_message_at ASC",
@@ -1693,14 +1666,14 @@ async def _generate_session_title(user_message: str) -> str:
         ])
         log_token_usage("session_title", resp, config.get("FAST_MODEL", ""))
         title = resp.content.strip().replace("\n", "").replace("\"", "").replace("'", "")[:10]
-        return title if title else user_message[:10]
+        return title if title else user_message[:6]
     except Exception as e:
         logger.warning(f"[SessionTitle] 标题生成失败，降级为截取: {e}")
-        return user_message[:10]
+        return user_message[:6]
 
 def _update_session_timestamp(uid: str, session_id: str, turn_count: int) -> None:
     """每轮结束后更新 session 的时间戳和轮数。"""
-    with _pg_conn() as conn:
+    with _get_pg_pool().connection() as conn:
         conn.execute(
             f"UPDATE {SESSIONS_TABLE} "
             f"SET last_message_at = NOW(), turn_count = %s "
@@ -1717,7 +1690,7 @@ async def list_sessions(current_user: TokenData = Depends(get_current_user)):
     """返回当前用户的 session 列表（最多10个，按最后消息时间降序）。"""
     uid = current_user.uid
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             cur = conn.execute(
                 f"SELECT session_id, title, last_message_at, turn_count "
                 f"FROM {SESSIONS_TABLE} "
@@ -1747,7 +1720,7 @@ async def get_session_messages(session_id: str, current_user: TokenData = Depend
     if not _verify_session_owner(uid, session_id):
         return {"code": 403, "message": "无权访问该会话", "data": []}
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             cur = conn.execute(
                 f"SELECT role, content, turn_count, sources, related_questions, user_judgement, judgement_detail "
                 f"FROM {CONV_TABLE} "
@@ -1787,7 +1760,7 @@ async def update_session_title(
     if not title:
         return {"code": 400, "message": "标题不能为空"}
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             conn.execute(
                 f"UPDATE {SESSIONS_TABLE} SET title = %s "
                 f"WHERE uid = %s AND session_id = %s AND deleted = false",
@@ -1807,7 +1780,7 @@ async def delete_session(session_id: str, current_user: TokenData = Depends(get_
     if not _verify_session_owner(uid, session_id):
         return {"code": 403, "message": "无权删除该会话"}
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             conn.execute(
                 f"UPDATE {SESSIONS_TABLE} SET deleted = true "
                 f"WHERE uid = %s AND session_id = %s",

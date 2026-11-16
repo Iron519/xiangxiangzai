@@ -1730,15 +1730,6 @@
             <input type="radio" name="ifShowRadio" value="false" /> 不展示
           </label>
         </div>
-        <label class="modal-field-label">子块重写 <span class="help-badge" data-tip="若开启，子块文本将进行优化，提升检索精度，但会消耗额外Token。">?</span></label>
-        <div style="display:flex;gap:16px;margin-top:4px">
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-            <input type="radio" name="rewriteMode" value="smart" /> 开启
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:var(--fs-sm)">
-            <input type="radio" name="rewriteMode" value="none" checked /> 关闭
-          </label>
-        </div>
         <label class="modal-field-label" style="margin-top:12px">文件描述 <span class="help-badge" data-tip="该描述将帮助象象仔快速检索。">?</span></label>
         <input type="text" class="modal-input" id="fileDescInput" placeholder="选填，简单概括文件内容" style="margin-top:4px" />
       </div>
@@ -2072,7 +2063,6 @@
     expireInput.value = '';
     expireInput.style.display = 'none';  // 默认隐藏填写框
     document.querySelector('input[name="ifShowRadio"][value="true"]').checked = true;  // 默认展示图片
-    document.querySelector('input[name="rewriteMode"][value="none"]').checked = true;  // 默认关闭重写
     const fileDescInput = document.getElementById('fileDescInput');
     if (fileDescInput) fileDescInput.value = '';
     renameMoreSection.style.display = 'none';  // 默认收起"更多"
@@ -2133,8 +2123,6 @@
       if (m) formData.append('expire_time', `${m[1]}-${m[2]}-${m[3]}T23:59`);
     }
     formData.append('if_show', document.querySelector('input[name="ifShowRadio"]:checked')?.value !== 'false');
-    const rewriteMode = document.querySelector('input[name="rewriteMode"]:checked');
-    formData.append('rewrite_mode', rewriteMode ? rewriteMode.value : 'none');
     const fileDescInput = document.getElementById('fileDescInput');
     const fileDesc = fileDescInput ? fileDescInput.value.trim() : '';
     if (fileDesc) {

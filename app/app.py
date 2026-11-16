@@ -18,7 +18,6 @@ if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from calculate_logic.rag.generate_answer import router as chat_router, close_checkpointer, preload_faq_index
-from calculate_logic.rag.retrieval_rerank import preload_kb_bm25, invalidate_kb_bm25
 from calculate_logic.rag.warmup import run_sync_warmup, run_async_warmup
 from table_data.chat_tag import tag_loop
 from calculate_logic.chunk_pipeline.routes import router as chunk_router
@@ -98,7 +97,7 @@ async def _warmup_on_startup():
     """统一预热：在 uvicorn 开始接受请求前，将所有懒加载的客户端/连接池/API 连接提前初始化。
 
     分两阶段：
-    1. 同步预热：LLM 单例实例化、PG/Redis 连接池创建、BM25 索引构建
+    1. 同步预热：LLM 单例实例化、PG/Redis 连接池创建、FAQ BM25 索引构建
     2. 异步预热：Embedding/Rerank/LLM API 的 TCP/TLS 连接建立（并发执行）
 
     预热失败不阻断启动（各组件有懒加载兜底，首次请求时会重试初始化）。

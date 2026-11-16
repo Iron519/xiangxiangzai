@@ -325,153 +325,6 @@ class CustomRerankClient:
 # 两端共享同一份 jieba 自定义词典，保证 tsv 存储与查询分词完全一致。
 
 
-# ================= BM25 关键词索引（进程级缓存，启动预热 + 懒加载 + 懒失效） =================
-
-class _KbBM25Index:
-    """内存 BM25 索引：全量 KB 子块分词 + IDF + BM25 打分。
-    进程级单例，启动预热，知识库变更后调 invalidate() 标记过期，下次检索时自动重建。"""
-
-    def __init__(self):
-        self._doc_tokens: List[List[str]] = []
-        self._chunk_indices: List[int] = []
-        self._idf: Dict[str, float] = {}
-        self._doc_freqs: List[Dict[str, int]] = []
-        self._doc_len: List[int] = []
-        self._avgdl: float = 0.0
-        self._n: int = 0
-        self._ready: bool = False
-        self._lock: Optional[asyncio.Lock] = None
-        self._uid: str = ""
-
-    @property
-    def ready(self) -> bool:
-        return self._ready
-
-    def _build(self, table_name: str, uid: str = ""):
-        """同步构建索引：从 PG 加载全量子块 → jieba 分词 → 算 IDF。"""
-        conninfo = (
-            f"host={PG_HOST} port={PG_PORT} dbname={PG_DATABASE} "
-            f"user={PG_USER} password={PG_PASSWORD}"
-        )
-        try:
-            with psycopg.connect(conninfo) as conn:
-                if uid:
-                    uid_filter = "AND uid IN (%s, %s)"
-                    params = (uid, ADMIN_UID)
-                else:
-                    uid_filter = ""
-                    params = ()
-                with conn.cursor() as cur:
-                    cur.execute(
-                        f"SELECT chunk_index, child_content FROM {table_name} "
-                        f"WHERE child_content IS NOT NULL {uid_filter} ORDER BY chunk_index",
-                        params,
-                    )
-                    rows = cur.fetchall()
-        except Exception as e:
-            logger.error(f"[BM25] 加载 KB 语料失败: {e}")
-            return
-
-        if not rows:
-            logger.warning("[BM25] KB 语料为空，索引未构建")
-            return
-
-        doc_tokens = []
-        chunk_indices = []
-        doc_freqs = []
-        doc_len = []
-        df: Dict[str, int] = {}
-
-        for chunk_index, content in rows:
-            tokens = [t for t in jieba.cut(content or "") if t.strip()]
-            doc_tokens.append(tokens)
-            chunk_indices.append(int(chunk_index))
-            doc_freqs.append({})
-            doc_len.append(len(tokens))
-            for word in set(tokens):
-                df[word] = df.get(word, 0) + 1
-                doc_freqs[-1][word] = doc_freqs[-1].get(word, 0) + 1
-
-        n = len(rows)
-        idf = {word: math.log((n + 1) / d) for word, d in df.items()}
-        avgdl = sum(doc_len) / n if n > 0 else 0.0
-
-        self._doc_tokens = doc_tokens
-        self._chunk_indices = chunk_indices
-        self._idf = idf
-        self._doc_freqs = doc_freqs
-        self._doc_len = doc_len
-        self._avgdl = avgdl
-        self._n = n
-        self._uid = uid
-        self._ready = True
-        logger.debug(f"[BM25] 索引构建完成: {n} 篇文档, {len(idf)} 个词项, avgdl={avgdl:.1f}")
-
-    def ensure_built(self, table_name: str, uid: str = ""):
-        """同步确保索引已构建（如未构建或已失效则现场构建）。"""
-        if self._ready and (uid == self._uid or uid == ""):
-            return
-        self._ready = False
-        self._build(table_name, uid)
-
-    async def aensure_built(self, table_name: str, uid: str = ""):
-        """异步确保索引已构建，用 asyncio.Lock 防并发重复构建。"""
-        if self._ready and (uid == self._uid or uid == ""):
-            return
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        async with self._lock:
-            if self._ready and (uid == self._uid or uid == ""):
-                return
-            await asyncio.to_thread(self._build, table_name, uid)
-
-    def invalidate(self):
-        """标记索引过期，下次检索时自动重建。"""
-        if self._ready:
-            logger.debug("[BM25] 索引已标记失效，下次检索将重建")
-        self._ready = False
-
-    def search(self, query_tokens: List[str], top_k: int) -> List[Tuple[int, float]]:
-        """BM25 打分，返回 [(chunk_index, score), ...] 降序 top-K。"""
-        if not self._ready or not self._doc_tokens:
-            return []
-
-        k1 = 1.5
-        b = 0.75
-        scores = np.zeros(self._n, dtype=np.float32)
-        for i in range(self._n):
-            dl = self._doc_len[i]
-            freq_map = self._doc_freqs[i]
-            score = 0.0
-            for token in query_tokens:
-                tf = freq_map.get(token, 0)
-                if tf == 0:
-                    continue
-                idf_val = self._idf.get(token, 0.0)
-                denom = tf + k1 * (1 - b + b * dl / self._avgdl) if self._avgdl > 0 else tf + k1
-                score += idf_val * tf * (k1 + 1) / denom
-            scores[i] = score
-
-        nonzero_idx = np.nonzero(scores)[0]
-        if len(nonzero_idx) == 0:
-            return []
-        top_idx = nonzero_idx[np.argsort(-scores[nonzero_idx])][:top_k]
-        return [(self._chunk_indices[i], float(scores[i])) for i in top_idx]
-
-
-_kb_bm25 = _KbBM25Index()
-
-
-def preload_kb_bm25(table_name: str = TABLE_NAME, uid: str = "") -> None:
-    """启动预热：同步构建 BM25 索引，避免首次请求卡顿。"""
-    _kb_bm25.ensure_built(table_name, uid)
-
-
-def invalidate_kb_bm25() -> None:
-    """标记 BM25 索引过期，供外部调用（上传完成/删除后）。"""
-    _kb_bm25.invalidate()
-
-
 # ================= PgHybridRetriever =================
 class PgHybridRetriever:
     """PostgreSQL 混合检索器"""
@@ -547,9 +400,13 @@ class PgHybridRetriever:
     # ----------------- 数据库检索 -----------------
     def _vector_search(self, conn: psycopg.Connection, query_time: datetime,
                        query_embedding: List[float], candidate_top_k: int,
-                       uid: str = "") -> List[Dict[str, Any]]:
+                       uid: str = "",
+                       target_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         """向量塔：pgvector 余弦距离 top-K，返回完整行。"""
         uid_filter = _uid_filter_sql(uid, "c")
+        tag_filter = ""
+        if target_tags:
+            tag_filter = "AND c.metadata->'tags' ?| %(target_tags)s"
         sql = f"""
         SELECT c.chunk_index, c.child_content, c.file_path, c.file_name, c.text_hash,
                FALSE::boolean AS is_qa, c.metadata, c.group_id, c.internal_id,
@@ -561,6 +418,7 @@ class PgHybridRetriever:
         WHERE c.embedding IS NOT NULL
           AND (c.expire_time IS NULL OR c.expire_time > %(query_time)s)
           {uid_filter}
+          {tag_filter}
         ORDER BY c.embedding <=> %(query_embedding)s, c.update_time DESC NULLS LAST
         LIMIT %(candidate_top_k)s
         """
@@ -570,6 +428,8 @@ class PgHybridRetriever:
             "candidate_top_k": candidate_top_k,
         }
         params.update(_uid_filter_params(uid))
+        if target_tags:
+            params["target_tags"] = list(target_tags)
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(sql, params)
             return list(cur.fetchall())
@@ -593,24 +453,67 @@ class PgHybridRetriever:
             cur.execute(sql, chunk_indices)
             return {int(row["chunk_index"]): row for row in cur.fetchall()}
 
+    def _keyword_search(self, conn: psycopg.Connection, query_time: datetime,
+                        query_text: str, candidate_top_k: int,
+                        uid: str = "",
+                        target_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """关键词塔：PG 全文检索（content_tsv + ts_rank），返回完整行。"""
+        tsquery_str = tokenize_for_tsquery(query_text)
+        if not tsquery_str.strip():
+            return []
+        uid_filter = _uid_filter_sql(uid, "c")
+        tag_filter = ""
+        if target_tags:
+            tag_filter = "AND c.metadata->'tags' ?| %(target_tags)s"
+        sql = f"""
+        SELECT c.chunk_index, c.child_content, c.file_path, c.file_name, c.text_hash,
+               FALSE::boolean AS is_qa, c.metadata, c.group_id, c.internal_id,
+               c.parent_content, NULL::text AS related_content_summary,
+               c.related_image_url,
+               ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s)) AS similarity,
+               c.upload_time, c.update_time, c.expire_time, c.if_show
+        FROM {self.table_name} c
+        WHERE c.content_tsv @@ to_tsquery('simple', %(tsquery)s)
+          AND (c.expire_time IS NULL OR c.expire_time > %(query_time)s)
+          {uid_filter}
+          {tag_filter}
+        ORDER BY ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s)) DESC
+        LIMIT %(candidate_top_k)s
+        """
+        params = {
+            "tsquery": tsquery_str,
+            "query_time": query_time,
+            "candidate_top_k": candidate_top_k,
+        }
+        params.update(_uid_filter_params(uid))
+        if target_tags:
+            params["target_tags"] = list(target_tags)
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            return list(cur.fetchall())
+
     @staticmethod
     def _rrf_fuse(vector_hits: List[Dict[str, Any]],
-                  bm25_hits: List[Tuple[int, float]],
+                  keyword_hits: List[Dict[str, Any]],
                   all_rows: Dict[int, Dict[str, Any]],
                   vector_weight: float, keyword_weight: float,
                   rrf_k: int, coarse_top_k: int) -> List[Dict[str, Any]]:
-        """RRF 融合两塔排名 → 取 top-coarse_top_k → 回填完整行 + hybrid_score。"""
-        vector_rank = {int(row["chunk_index"]): i + 1 for i, row in enumerate(vector_hits)}
-        bm25_rank = {chunk_index: i + 1 for i, (chunk_index, _) in enumerate(bm25_hits)}
+        """RRF 融合两塔排名 → 取 top-coarse_top_k → 回填完整行 + hybrid_score。
 
-        all_chunk_indices = set(vector_rank.keys()) | set(bm25_rank.keys())
+        vector_hits / keyword_hits 均为完整行 dict 列表（含 chunk_index），
+        按各自列表顺序确定排名（1-based）。
+        """
+        vector_rank = {int(row["chunk_index"]): i + 1 for i, row in enumerate(vector_hits)}
+        keyword_rank = {int(row["chunk_index"]): i + 1 for i, row in enumerate(keyword_hits)}
+
+        all_chunk_indices = set(vector_rank.keys()) | set(keyword_rank.keys())
         merged = []
         for chunk_index in all_chunk_indices:
             score = 0.0
             if chunk_index in vector_rank:
                 score += vector_weight / (rrf_k + vector_rank[chunk_index])
-            if chunk_index in bm25_rank:
-                score += keyword_weight / (rrf_k + bm25_rank[chunk_index])
+            if chunk_index in keyword_rank:
+                score += keyword_weight / (rrf_k + keyword_rank[chunk_index])
             merged.append((chunk_index, score))
 
         merged.sort(key=lambda x: x[1], reverse=True)
@@ -628,43 +531,41 @@ class PgHybridRetriever:
     def _coarse_search(self, conn: psycopg.Connection, query_text: str, query_time: datetime,
                        query_embedding: List[float], vector_weight: float, keyword_weight: float,
                        candidate_top_k: int, coarse_top_k: int, rrf_k: int,
-                       uid: str = "") -> List[Dict[str, Any]]:
+                       uid: str = "",
+                       target_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         # ── 向量塔：PG pgvector top-K ──
-        vector_hits = self._vector_search(conn, query_time, query_embedding, candidate_top_k, uid=uid)
+        vector_hits = self._vector_search(conn, query_time, query_embedding, candidate_top_k, uid=uid, target_tags=target_tags)
 
-        # ── 关键词塔：内存 BM25 打分 top-K ──
-        query_tokens = [t for t in tokenize_for_tsquery(query_text).split() if t.strip()] if query_text.strip() else []
-        bm25_hits: List[Tuple[int, float]] = []
-        if query_tokens and _kb_bm25.ready:
-            bm25_hits = _kb_bm25.search(query_tokens, candidate_top_k)
-        elif query_tokens and not _kb_bm25.ready:
-            logger.warning("[BM25] 索引未就绪，关键词塔跳过（仅向量塔）")
+        # ── 关键词塔：PG 全文检索 top-K ──
+        keyword_hits = self._keyword_search(conn, query_time, query_text, candidate_top_k, uid=uid, target_tags=target_tags)
 
-        if not vector_hits and not bm25_hits:
+        if not vector_hits and not keyword_hits:
             return []
 
-        # ── 收集所有需要的 chunk_index，批量回查 PG ──
-        needed_indices = set(int(r["chunk_index"]) for r in vector_hits)
-        needed_indices |= set(ci for ci, _ in bm25_hits)
-        # 向量塔已有完整行，只需回查 BM25 独有的
-        bm25_only = [ci for ci, _ in bm25_hits if ci not in {int(r["chunk_index"]) for r in vector_hits}]
-        extra_rows = self._fetch_by_chunk_indices(conn, bm25_only) if bm25_only else {}
-        all_rows = {int(r["chunk_index"]): r for r in vector_hits}
-        all_rows.update(extra_rows)
+        # ── 合并所有完整行（两塔均返回完整行，无需回查） ──
+        all_rows: Dict[int, Dict[str, Any]] = {}
+        for row in vector_hits:
+            all_rows[int(row["chunk_index"])] = row
+        for row in keyword_hits:
+            ci = int(row["chunk_index"])
+            if ci not in all_rows:
+                all_rows[ci] = row
 
         # ── RRF 融合 ──
-        return self._rrf_fuse(vector_hits, bm25_hits, all_rows,
+        return self._rrf_fuse(vector_hits, keyword_hits, all_rows,
                               vector_weight, keyword_weight, rrf_k, coarse_top_k)
 
     def _sync_coarse(self, query_text: str, query_time: datetime, query_embedding: List[float],
                      vector_weight: float, keyword_weight: float,
                      candidate_top_k: int, coarse_top_k: int, rrf_k: int,
-                     uid: str = "") -> List[Dict[str, Any]]:
+                     uid: str = "",
+                     target_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         pool = self._get_pool()
         with pool.connection() as conn:
             register_vector(conn)
             return self._coarse_search(conn, query_text, query_time, query_embedding,
-                                       vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid)
+                                       vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k,
+                                       uid=uid, target_tags=target_tags)
 
     # ----------------- 结果处理 -----------------
     @staticmethod
@@ -856,7 +757,8 @@ class PgHybridRetriever:
                      coarse_top_k: int = SEARCH_COARSE_TOP_K,
                      rerank_top_k: int = SEARCH_RERANK_TOP_K,
                      rrf_k: int = SEARCH_RRF_K,
-                     uid: str = "") -> HybridSearchResponse:
+                     uid: str = "",
+                     target_tags: Optional[List[str]] = None) -> HybridSearchResponse:
         t0 = time.time()
         logger.info(f"[search] 查询开始: query_text={query_text[:50]}...")
 
@@ -875,9 +777,6 @@ class PgHybridRetriever:
 
         candidate_top_k = max(candidate_top_k, coarse_top_k, rerank_top_k, SEARCH_FINAL_MAX_TOP_K)
 
-        # 确保 BM25 索引就绪（已构建则秒过，未构建则异步构建）
-        await _kb_bm25.aensure_built(self.table_name, uid)
-
         embeddings = await self.embedding_client.text_embedding([query_text])
         if not embeddings:
             raise RuntimeError("查询向量化失败")
@@ -888,7 +787,8 @@ class PgHybridRetriever:
         rows = await loop.run_in_executor(
             None,
             lambda: self._sync_coarse(query_text, query_time, query_emb,
-                                      vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k, uid=uid),
+                                      vector_weight, keyword_weight, candidate_top_k, coarse_top_k, rrf_k,
+                                      uid=uid, target_tags=target_tags),
         )
         t2 = time.time()
 

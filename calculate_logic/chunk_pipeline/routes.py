@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from fastapi import APIRouter, UploadFile, File, Form, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -19,12 +20,23 @@ from calculate_logic.chunk_pipeline.chunk import (
     resolve_child_image_urls,
 )
 from calculate_logic.chunk_pipeline.embedding import EmbeddingModel, store_semantic_chunks
-from calculate_logic.chunk_pipeline.rewrite import rewrite_chunks_with_coref
 from calculate_logic.fetch_knowledge.parse_file import DocumentParser, PARSE_RESULT_DIR
-from calculate_logic.rag.retrieval_rerank import invalidate_kb_bm25
 from sso_did.auth import TokenData, get_current_user, get_current_user_sse
 
 ADMIN_UID = os.getenv("ADMIN_UID", "admin")
+
+_pg_pool = None
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        _pg_pool = ConnectionPool(
+            conninfo=f"host={os.getenv('PG_HOST')} port={int(os.getenv('PG_PORT', '5432'))} "
+                     f"dbname={os.getenv('PG_DATABASE')} user={os.getenv('PG_USER')} "
+                     f"password={os.getenv('PG_PASSWORD')}",
+            min_size=1, max_size=5, open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+    return _pg_pool
 
 
 # ============================================================
@@ -84,17 +96,6 @@ _TASK_COLUMNS = {
 }
 
 
-def _task_conn():
-    """上传任务状态表专用 PG 连接。"""
-    return psycopg.connect(
-        host=os.getenv("PG_HOST"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname=os.getenv("PG_DATABASE"),
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-    )
-
-
 def _has_active_task(uid: str, statuses: tuple[str, ...] = ()) -> bool:
     """并发模式下不再限制单用户单任务，直接返回 False。"""
     return False
@@ -117,7 +118,7 @@ def _create_task(task_id: str, uid: str, original_name: str, save_name: str,
     if_show: 该文件图片是否可展示（文件级开关），存入任务表供排队任务恢复。
     """
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"INSERT INTO {UPLOAD_TASKS_TABLE} "
@@ -136,7 +137,7 @@ def _create_task(task_id: str, uid: str, original_name: str, save_name: str,
 async def recover_queued_tasks() -> None:
     """进程启动时清理上次崩溃遗留的中断任务。"""
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {UPLOAD_TASKS_TABLE} "
@@ -163,7 +164,7 @@ def _set_task_status(task_id: str, status: str, **kwargs) -> None:
     set_clause = ", ".join(f"{k} = %s" for k in updates)
     params = list(updates.values()) + [task_id]
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {UPLOAD_TASKS_TABLE} SET {set_clause} WHERE task_id = %s",
@@ -181,7 +182,7 @@ class TaskCancelled(Exception):
 def _get_task_status(task_id: str) -> str | None:
     """读取单条任务的当前状态，用于后台协程的中止检查。"""
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT status FROM {UPLOAD_TASKS_TABLE} WHERE task_id = %s", (task_id,))
                 row = cur.fetchone()
@@ -226,7 +227,7 @@ def _list_tasks(uid: str | None = None) -> list[dict[str, Any]]:
     tasks: list[dict[str, Any]] = []
     expired_ids: list[str] = []
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 if uid:
                     cur.execute(
@@ -282,17 +283,6 @@ def _serialize_task(record: dict[str, Any]) -> dict[str, Any]:
     return task_info
 
 
-def _kb_conn():
-    """知识库表专用 PG 连接。"""
-    return psycopg.connect(
-        host=os.getenv("PG_HOST"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname=os.getenv("PG_DATABASE"),
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-    )
-
-
 def _parse_timestamp(value: str | None) -> datetime | None:
     if not value:
         return None
@@ -307,7 +297,6 @@ async def _trigger_next_queued(uid: str) -> None:
 async def _background_process(task_id: str, save_path: str, original_name: str, uid: str = "anonymous",
                               expire_time: Optional[str] = None,
                               if_show: bool = True,
-                              rewrite_mode: str = "none",
                               file_description: str = "") -> None:
     """后台协程：解析 → [解析完成] → 切块 → 向量化 → 入库 → [注入完成]。
 
@@ -365,7 +354,6 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             embedding_model = EmbeddingModel()
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
-            await rewrite_chunks_with_coref(semantic_chunks, rewrite_mode=rewrite_mode)
             _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
             for sc in semantic_chunks:
                 sc.file_size = _file_size
@@ -397,7 +385,6 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
                 },
             )
             logger.info(f"[Task {task_id}] 注入完成！共 {summary.get('chunk_count', 0)} 个切片")
-            invalidate_kb_bm25()
 
             _save_name = os.path.basename(save_path)
             if file_description and file_description.strip():
@@ -410,7 +397,7 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
         logger.info(f"[Task {task_id}] 任务已被中止: {original_name}")
         _cleanup_task_artifacts(save_path, uid)
         try:
-            with _task_conn() as conn:
+            with _get_pg_pool().connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(f"DELETE FROM {UPLOAD_TASKS_TABLE} WHERE task_id = %s", (task_id,))
                 conn.commit()
@@ -426,7 +413,6 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
 
 async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                               original_name: str, uid: str = "anonymous", if_show: bool = True,
-                              rewrite_mode: str = "none",
                               file_description: str = "") -> None:
     """后台重切片：跳过解析，直接用 merged.md 全文 切块→向量化→入库。"""
     embedding_model = None
@@ -458,7 +444,6 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             embedding_model = EmbeddingModel()
             semantic_chunks = await build_semantic_chunks(father_chunks, embedder=embedding_model.embed)
             await asyncio.to_thread(resolve_child_image_urls, semantic_chunks, save_path, uid)
-            await rewrite_chunks_with_coref(semantic_chunks, rewrite_mode=rewrite_mode)
             _file_size = os.path.getsize(save_path) if os.path.exists(save_path) else 0
             for sc in semantic_chunks:
                 sc.file_size = _file_size
@@ -470,7 +455,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
             await asyncio.to_thread(_set_task_status, task_id, UPLOAD_STATUS_INGESTING)
             KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks")
             try:
-                with _kb_conn() as conn:
+                with _get_pg_pool().connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute(f"DELETE FROM {KB_TABLE} WHERE file_name = %s AND uid = %s", (file_name, uid))
                     conn.commit()
@@ -496,14 +481,7 @@ async def _background_rechunk(task_id: str, file_name: str, save_path: str,
                 },
             )
             logger.info(f"[Rechunk] 重切片完成 {original_name}: {summary.get('chunk_count', 0)} 切片")
-            invalidate_kb_bm25()
-
-            if file_description and file_description.strip():
-                from calculate_logic.rag.file_tagging import write_manual_description
-                write_manual_description(uid, file_name, file_description)
-            else:
-                from calculate_logic.rag.file_tagging import generate_file_description
-                asyncio.create_task(generate_file_description(uid, file_name, original_name))
+            # 重新切片不重新打标——metadata 重置为 {}，文件描述和标签丢失
     except TaskCancelled:
         logger.info(f"[Rechunk] 任务 {task_id} 被中止")
     except Exception as e:
@@ -526,7 +504,6 @@ SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".xls", ".txt", ".md"
 @router.post("/chunk/upload")
 async def upload_file(file: UploadFile = File(...), display_name: str = Form(None),
                       expire_time: str = Form(None), if_show: bool = Form(False),
-                      rewrite_mode: str = Form("none"),
                       overwrite: bool = Form(False),
                       file_description: str = Form(None),
                       current_user: TokenData = Depends(get_current_user)):
@@ -539,7 +516,6 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     expire_time: 可选，文件过期时间（ISO 8601 字符串，如 "2026-12-31T23:59"）。
                  不传或为空则视为永久有效。检索时自动过滤已过期文件。
     if_show: 该文件内含的图片是否允许在检索结果/聊天中展示。False 时不展示图片，文字仍正常检索。
-    rewrite_mode: 子块重写模式。"smart"=开启（仅对含代词的子块重写），"none"=关闭。
     overwrite: 若 upload_kb/{uid}/ 下已有同名文件，是否直接覆盖。False 时返回 409 让前端确认。
     """
     uid = current_user.uid  # 已登录用户的真实账号
@@ -609,7 +585,6 @@ async def upload_file(file: UploadFile = File(...), display_name: str = Form(Non
     # 立即启动后台异步处理，信号量控制并发上限
     asyncio.create_task(_background_process(task_id, save_path, original_name, uid=uid,
                                             expire_time=expire_iso, if_show=if_show,
-                                            rewrite_mode=rewrite_mode,
                                             file_description=file_description or ""))
 
     return JSONResponse(content={
@@ -711,11 +686,11 @@ async def kb_upload_sse(token: str = "", current_user: TokenData = Depends(get_c
 
 def _has_parse_result(file_name: str, uid: str) -> bool:
     """检查全文解析结果 merged.md 是否存在。
-    路径：parse_result/{uid}/{file_stem}/merged.md
+    路径：parse_result/{uid}/{file_name}/merged.md
     file_name 即 upload_kb 中的物理文件名（用户修改后的展示名），与 parse_result 目录名一致。
     """
-    stem = Path(file_name).stem.replace(" ", "_")
-    return (Path(PARSE_RESULT_DIR) / uid / stem / "merged.md").is_file()
+    name = Path(file_name).name.replace(" ", "_")
+    return (Path(PARSE_RESULT_DIR) / uid / name / "merged.md").is_file()
 
 
 def _has_original_file(file_path: str, file_name: str, uid: str) -> bool:
@@ -739,7 +714,7 @@ def _query_kb_files_with_filter(uid: str, is_admin: bool = False) -> list[dict]:
     if not KB_TABLE:
         return []
     try:
-        with _kb_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 if is_admin:
                     cur.execute(f"""
@@ -875,7 +850,7 @@ async def kb_file_parents(file_name: str, current_user: TokenData = Depends(get_
         return JSONResponse(status_code=500, content={"error": "KB 表名未配置"})
     uid = current_user.uid
     try:
-        with _kb_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -927,7 +902,7 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
     disk_removed = False
     file_uid = uid  # 文件所属 uid，用于定位 parse_result 目录
     try:
-        with _kb_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 # 先查出文件所属 uid（用于判断是否为 admin 共享文件）
                 cur.execute(f"SELECT uid FROM {KB_TABLE} WHERE file_name = %s AND uid = %s LIMIT 1", (file_name, uid))
@@ -982,7 +957,7 @@ async def kb_file_delete(file_name: str, current_user: TokenData = Depends(get_c
 
         logger.info(f"[KBFileDelete] 删除: {file_name} | 切片 {deleted_chunks} | 任务 {deleted_tasks} | parse_result {'已删' if parse_result_removed else '无/失败'} | upload_kb 保留")
         if deleted_chunks > 0:
-            invalidate_kb_bm25()
+            pass  # PG 全文检索天然实时，无需失效索引
         return JSONResponse(content={
             "success": True,
             "deleted_chunks": deleted_chunks,
@@ -1010,7 +985,7 @@ async def kb_task_delete(task_id: str, current_user: TokenData = Depends(get_cur
     disk_removed = False
     original_name = ""
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT save_name, original_name, status, save_path, uid FROM {UPLOAD_TASKS_TABLE} WHERE task_id = %s",
@@ -1034,7 +1009,7 @@ async def kb_task_delete(task_id: str, current_user: TokenData = Depends(get_cur
         if save_path:
             target = Path(save_path).resolve()
             if str(target).startswith(str(UPLOAD_DIR.resolve())) and target.is_file():
-                with _kb_conn() as conn:
+                with _get_pg_pool().connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute(f"SELECT 1 FROM {KB_TABLE} WHERE file_name = %s", (save_name,))
                         in_kb = cur.fetchone() is not None
@@ -1069,7 +1044,7 @@ async def kb_task_cancel(task_id: str, current_user: TokenData = Depends(get_cur
     - completed/failed/cancelled：不可中止，提示用删除接口清理。
     """
     try:
-        with _task_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT status, save_path, uid FROM {UPLOAD_TASKS_TABLE} WHERE task_id = %s",
@@ -1135,7 +1110,7 @@ def _kb_file_row(file_name: str, viewer_uid: str = "") -> dict[str, Any] | None:
     if not KB_TABLE:
         return None
     try:
-        with _kb_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 if viewer_uid:
                     cur.execute(
@@ -1177,11 +1152,11 @@ def _kb_file_row(file_name: str, viewer_uid: str = "") -> dict[str, Any] | None:
 
 def _merged_md_path(file_name: str, uid: str = "") -> Path:
     """由文件名推算其 parse_result 产物目录下的 merged.md。
-    路径：parse_result/{uid}/{file_stem}/merged.md
-    file_name 即 upload_kb 中的物理文件名，parse_result 目录名用同一 stem。
+    路径：parse_result/{uid}/{file_name}/merged.md
+    file_name 即 upload_kb 中的物理文件名，parse_result 目录名用完整文件名（含后缀）。
     """
-    stem = Path(file_name).stem.replace(" ", "_")
-    return Path(PARSE_RESULT_DIR) / uid / stem / "merged.md"
+    name = Path(file_name).name.replace(" ", "_")
+    return Path(PARSE_RESULT_DIR) / uid / name / "merged.md"
 
 
 def _read_merged_md(file_name: str, uid: str = "") -> str:
@@ -1263,7 +1238,6 @@ async def kb_file_rechunk(file_name: str, current_user: TokenData = Depends(get_
     asyncio.create_task(_background_rechunk(task_id, row["file_name"], row["file_path"],
                                             row["original_name"], uid=uid,
                                             if_show=row.get("if_show", True),
-                                            rewrite_mode="none",
                                             file_description=""))
     return JSONResponse(content={"success": True, "task_id": task_id,
                                  "original_name": row["original_name"],

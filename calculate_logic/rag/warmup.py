@@ -193,13 +193,12 @@ async def _warmup_fast_llm_api_ping():
 
 
 # ================================================================
-# 第三层：已有预热的 BM25 索引（保持原有调用，统一日志）
+# 第三层：FAQ BM25 索引预热（KB 已改用 PG 全文检索，无需预热）
 # ================================================================
 
 def _warmup_bm25_indices():
-    """预热 KB BM25 + FAQ BM25 索引（委托给原有 preload 函数）。"""
+    """预热 FAQ BM25 索引（KB 关键词检索已改用 PG content_tsv，无需内存索引）。"""
     from calculate_logic.rag.generate_answer import preload_faq_index
-    from calculate_logic.rag.retrieval_rerank import preload_kb_bm25
 
     t0 = time.time()
     try:
@@ -207,13 +206,6 @@ def _warmup_bm25_indices():
         _log_elapsed("FAQ BM25索引", t0, True)
     except Exception as e:
         _log_elapsed("FAQ BM25索引", t0, False, str(e))
-
-    t0 = time.time()
-    try:
-        preload_kb_bm25()
-        _log_elapsed("KB BM25索引", t0, True)
-    except Exception as e:
-        _log_elapsed("KB BM25索引", t0, False, str(e))
 
 
 # ================================================================

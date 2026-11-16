@@ -104,9 +104,8 @@ class MinerUProcessor:
         uid: str = "",
     ):
         self.pdf_path = str(pdf_path)
-        # 用 pdf_path（save_name）做产物目录名，与 upload_kb 和 PG file_name 一致
-        _name_stem = Path(self.pdf_path).stem
-        self.file_stem = _name_stem.replace(" ", "_")
+        # 用 pdf_path（save_name）做产物目录名，保留后缀，与 upload_kb 和 PG file_name 一致
+        self.file_stem = Path(self.pdf_path).name.replace(" ", "_")
         self.output_dir = Path(output_dir)
 
         # 支持 uid 子目录：output_dir/{uid}/{file_stem}/

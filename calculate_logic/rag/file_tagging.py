@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import httpx
 import psycopg
+from psycopg_pool import ConnectionPool
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from concurrent_log_handler import ConcurrentRotatingFileHandler
@@ -54,25 +55,29 @@ def get_fast_llm_client():
     return _fast_llm_client
 
 
-def _pg_conn():
-    return psycopg.connect(
-        host=_config["PG_HOST"],
-        port=int(_config["PG_PORT"]),
-        dbname=_config["PG_DATABASE"],
-        user=_config["PG_USER"],
-        password=_config["PG_PASSWORD"],
-    )
+_pg_pool = None
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        _pg_pool = ConnectionPool(
+            conninfo=f"host={_config['PG_HOST']} port={int(_config['PG_PORT'])} "
+                     f"dbname={_config['PG_DATABASE']} user={_config['PG_USER']} "
+                     f"password={_config['PG_PASSWORD']}",
+            min_size=1, max_size=5, open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+    return _pg_pool
 
 
-def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 2000) -> str:
+def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 4000) -> str:
     table = _config["PG_MYAGENT_KB_TABLE"]
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT parent_content FROM {table} "
                     f"WHERE uid = %s AND file_name = %s AND parent_content IS NOT NULL "
-                    f"ORDER BY chunk_index ASC LIMIT 3",
+                    f"ORDER BY chunk_index ASC LIMIT 5",
                     (uid, file_name),
                 )
                 rows = cur.fetchall()
@@ -80,7 +85,7 @@ def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 2000) -> s
                     cur.execute(
                         f"SELECT child_content FROM {table} "
                         f"WHERE uid = %s AND file_name = %s AND child_content IS NOT NULL "
-                        f"ORDER BY chunk_index ASC LIMIT 5",
+                        f"ORDER BY chunk_index ASC LIMIT 10",
                         (uid, file_name),
                     )
                     rows = cur.fetchall()
@@ -115,11 +120,17 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
 {chunks_text}
 
 请输出 JSON 格式，包含以下字段：
+- reasoning: 简要说明你为什么打这些标签（1-2句话，解释从文档内容中提取了哪些关键主题）
 - description: 用1-2句话总结文档的核心内容（不要超过80字）
-- tags: 3-5个主题标签（简短关键词，如"HR政策"、"请假流程"、"产品使用指南"）
+- tags: 至少3个、最多5个主题标签（简短关键词，如"HR政策"、"请假流程"、"产品使用指南"）
+
+要求：
+1. tags 数量必须 >= 3，不允许为空列表
+2. 标签应覆盖文档的主要主题，不要只打一个方面
+3. 标签用简短中文关键词，不要长句
 
 只输出 JSON，不要任何其他内容。格式如下：
-{{"description": "...", "tags": ["标签1", "标签2", "标签3"]}}"""
+{{"reasoning": "...", "description": "...", "tags": ["标签1", "标签2", "标签3"]}}"""
 
     llm = get_fast_llm_client()
     raw = ""
@@ -128,9 +139,9 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             llm.ainvoke(
                 [SystemMessage(content="你是一个文档分析助手，只输出JSON。"),
                  HumanMessage(content=prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 200},
+                extra_body={"enable_thinking": False, "max_tokens": 400},
             ),
-            timeout=20,
+            timeout=30,
         )
         raw = response.content.strip()
         if raw.startswith("```"):
@@ -138,14 +149,22 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             raw = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
         result = json.loads(raw)
 
+        reasoning = result.get("reasoning", "").strip()
         description = result.get("description", "").strip()
         tags = result.get("tags", [])
         if not isinstance(tags, list):
             tags = [str(tags)] if tags else []
         tags = [str(t).strip() for t in tags if str(t).strip()][:5]
 
+        if len(tags) < 3:
+            logger.warning(f"[FileTagging] LLM 返回标签不足3个({len(tags)}个): uid={uid} file={file_name} tags={tags}")
+
         if not description:
             logger.warning(f"[FileTagging] LLM 返回的 description 为空: uid={uid} file={file_name}")
+            return None
+
+        if not tags:
+            logger.warning(f"[FileTagging] LLM 返回的 tags 为空，跳过写入: uid={uid} file={file_name}")
             return None
 
         tagged_at = datetime.now(timezone.utc).isoformat()
@@ -154,9 +173,10 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             "tags": tags,
             "tag_source": "llm_auto",
             "tagged_at": tagged_at,
+            "tag_reasoning": reasoning,
         }
 
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {table} SET metadata = %s::jsonb "
@@ -169,7 +189,7 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
         return metadata
 
     except asyncio.TimeoutError:
-        logger.warning(f"[FileTagging] LLM 超时(20s): uid={uid} file={file_name}")
+        logger.warning(f"[FileTagging] LLM 超时(30s): uid={uid} file={file_name}")
         return None
     except json.JSONDecodeError as e:
         logger.error(f"[FileTagging] JSON 解析失败: uid={uid} file={file_name} raw={raw[:200]}: {e}")
@@ -183,7 +203,7 @@ def has_manual_description(uid: str, file_name: str) -> bool:
     """检查该文件是否已有用户手填的描述（tag_source=manual），有则跳过 LLM 打标。"""
     table = _config["PG_MYAGENT_KB_TABLE"]
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT metadata->'tag_source' FROM {table} "
@@ -208,7 +228,7 @@ def write_manual_description(uid: str, file_name: str, description: str) -> None
         "tagged_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     f"UPDATE {table} SET metadata = %s::jsonb "
@@ -224,7 +244,7 @@ def write_manual_description(uid: str, file_name: str, description: str) -> None
 def load_file_descriptions(uid: str, admin_uid: str = "") -> list[dict]:
     table = _config["PG_MYAGENT_KB_TABLE"]
     try:
-        with _pg_conn() as conn:
+        with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 uids = [uid] if not admin_uid or admin_uid == uid else [uid, admin_uid]
                 placeholders = ", ".join(["%s"] * len(uids))
