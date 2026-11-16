@@ -428,10 +428,13 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 入口 → 敏感检测(并行) + 场景检测(并行)
      → node_plan_retrieval（指代消解 + 标签匹配 + 检索参数规划，Fast LLM）
            ├─ 知识库无文件 → node_no_kb_hit → END
-           ├─ target_tags 为空 → node_generate（闲聊/工具由LLM自主处理）→ [tool_node → node_generate] → END
-           └─ target_tags 非空 → node_faq_match →[命中? END]
-                                 └→ node_retrieve →[context为空? node_no_kb_hit → END]
-                                                   └→ node_generate → END
+           ├─ target_tags 非空 → node_faq_match →[命中? END]
+           │                      └→ node_retrieve →[context为空? node_no_kb_hit → END]
+           │                                        └→ node_generate → END
+           ├─ target_tags 为空 + skip_tag_filter=True → node_retrieve（全局检索，不加标签过滤，关键词权重0.7）
+           │                                              →[context为空? node_no_kb_hit → END]
+           │                                              └→ node_generate → END
+           └─ target_tags 为空 + skip_tag_filter=False → node_no_kb_hit → END
 
 注：敏感/场景检测在图外并行预判（非图节点），敏感命中则跳过主图返回固定话术，场景命中则注入 scene 字段。
 ```
@@ -447,16 +450,21 @@ rerank 后不固定取 N 条，而是通过断崖检测自适应决定返回数�
 | `node_generate` | 生成最终回答 / 调用工具 | Main LLM + bind_tools；`is_chitchat` = 无检索上下文 | `final_answer` 或 `tool_calls` |
 | `tool_node` | 执行工具调用 | LangGraph ToolNode | `ToolMessage` |
 
-**知识库未命中处理**：两种情况走 `node_no_kb_hit` 节点直接返回 `FALLBACK_NO_KB_HIT` 话术，不经过 LLM 生成——避免 LLM 凭自身知识"编造"回答：
+**知识库未命中处理**：以下情况走 `node_no_kb_hit` 节点直接返回 `FALLBACK_NO_KB_HIT` 话术，不经过 LLM 生成——避免 LLM 凭自身知识"编造"回答：
 1. 知识库无文件（`file_descriptions` 为空）→ `node_plan_retrieval` 直接路由到 `node_no_kb_hit`
-2. 知识库有文件但检索结果为空（`target_tags` 非空，`node_retrieve` 返回 context 为空）→ `node_retrieve` 后路由到 `node_no_kb_hit`
+2. 知识库有文件但 LLM 判断问题与所有标签都不相关（`target_tags` 为空且 `skip_tag_filter=False`）→ `node_plan_retrieval` 路由到 `node_no_kb_hit`
+3. 知识库有文件且 `target_tags` 非空，但检索结果为空（`node_retrieve` 返回 context 为空）→ `node_retrieve` 后路由到 `node_no_kb_hit`
+4. `skip_tag_filter=True` 走全局检索但检索结果仍为空 → `node_retrieve` 后路由到 `node_no_kb_hit`
+
+**术语/专用名词全局检索**：当用户问题包含术语/专用名词/黑话/缩写等，LLM 无法从现有标签池中匹配到相关标签时，输出 `target_tags=[]` + `skip_tag_filter=True`。此时跳过标签过滤走全局检索（不传 `target_tags` 给 SQL），同时将向量/关键词权重从默认 0.6:0.4 调整为 0.3:0.7，加重关键词检索权重——术语类查询更依赖字面匹配而非语义相似。
 
 **ChatState 关键字段**：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `query` | Optional[str] | LLM 指代消解后的查询，覆盖原始问题 |
-| `target_tags` | Optional[list] | LLM 从标签池选择的标签，为空表示不需要检索 |
+| `target_tags` | Optional[list] | LLM 从标签池选择的标签，为空表示未匹配到标签 |
+| `skip_tag_filter` | Optional[bool] | 问题含术语/专用名词但标签无法匹配时为 True，跳过标签过滤走全局检索 |
 | `planned_top_k` | Optional[int] | LLM 规划的检索切片数量（2-15） |
 | `search_strategy` | Optional[str] | 检索策略：direct/broad/precise |
 | `context` | str | 检索到的上下文（兄弟块拼接） |
@@ -633,8 +641,8 @@ rerank query 加 `[Bilingual context: Chinese and English content may coexist]` 
 ### 11.10 标签过滤驱动的意图路由
 
 `node_plan_retrieval` 作为图入口，从 PG 加载文件描述和标签池，LLM 在一次调用中完成指代消解 → 标签匹配 → 检索参数规划。三种分流路径：
-- 知识库无文件 → `node_no_kb_hit`（兜底话术，不经 LLM）
-- `target_tags` 为空 → `node_generate`（闲聊/工具，LLM 自主处理）
+- 知识库无文件 或 `target_tags` 为空且 `skip_tag_filter=False` → `node_no_kb_hit`（兜底话术，不经 LLM）
+- `target_tags` 为空且 `skip_tag_filter=True` → `node_retrieve`（跳过标签过滤走全局检索，向量/关键词权重调整为 0.3:0.7）
 - `target_tags` 非空 → FAQ 匹配 → 检索（SQL 按 `metadata->'tags' ?| array[...]` 过滤）→ 检索为空走 `node_no_kb_hit`，非空走 `node_generate`
 
 ### 11.11 Docker VirtioFS 写入保护

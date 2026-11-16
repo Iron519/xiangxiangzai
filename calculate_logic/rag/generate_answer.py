@@ -134,6 +134,7 @@ class ChatState(TypedDict):
     planned_top_k: Optional[int]  # LLM 规划的检索切片数量
     search_strategy: Optional[str]  # 检索策略 (direct/broad/precise)
     target_tags: Optional[list]  # LLM 规划的命中标签列表，用于检索 SQL 过滤；为空表示不需要检索
+    skip_tag_filter: Optional[bool]  # 问题含术语/专用名词但标签无法匹配时为 True，跳过标签过滤走全局检索
 
 # ================= 封装Langggraph工具 ===============
 tools = [query_leave_quota, query_leave_record, query_working_time, query_personal_info]
@@ -272,7 +273,7 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
     if not file_descriptions:
         logger.info("[PlanRetrieval] 无文件描述，不需要检索")
         return {"query": last_message, "planned_top_k": 5, "search_strategy": "direct",
-                "target_tags": [], "file_descriptions": []}
+                "target_tags": [], "skip_tag_filter": False, "file_descriptions": []}
 
     # 汇总所有标签
     all_tags = sorted(set(t for f in file_descriptions for t in f.get("tags", []) if t))
@@ -288,21 +289,24 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
 
     prompt = f"""你是一个检索策略规划器。请分析用户问题并制定检索策略。
 
-【知识库文件】
-{file_list_text}
-
-【可用标签】
-{tags_text}
-
 【历史对话】
 {history_text}
 
 【用户当前问题】
 {last_message}
 
+【知识库文件】
+{file_list_text}
+
+【可用标签】
+{tags_text}
+
 请完成以下任务（按顺序）：
-1. 如果是追问（有代词/省略），先做指代消解，把问题补全为独立完整的问题。注意：历史对话中用户的提问是改写的主要依据，AI的回答仅作为辅助参考，不要让AI的回答内容主导改写方向
-2. 基于第1步的改写结果（不是原始问题），从【可用标签】中选择与问题相关的标签。如果没有标签相关，返回空列表——这意味着不需要检索知识库
+1. 指代消解：仅基于【历史对话】和【用户当前问题】进行代词消解和省略补全，将追问补全为独立完整的问题。如果无历史对话或无需消解，rewritten_query 与用户原始问题一致。
+2. 基于第1步的改写结果（不是原始问题），从【可用标签】中选择与问题相关的标签。
+   - 如果有相关标签，填入 target_tags
+   - 如果问题包含术语/专用名词/黑话/缩写等，但现有标签无法匹配，将 target_tags 设为空列表，并将 skip_tag_filter 设为 true——这意味着跳过标签过滤，走全局检索
+   - 如果问题纯粹是闲聊/打招呼/与知识库完全无关，将 target_tags 设为空列表，skip_tag_filter 设为 false
 3. 评估问题难度：simple(单一事实) / moderate(需上下文关联) / complex(多条件/多步骤)
 4. 决定检索切片数量：
    - simple: 3-5
@@ -314,7 +318,7 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
    - precise: 问题涉及具体数值/条款，精确检索
 
 输出JSON，格式：
-{{"rewritten_query": "...", "target_tags": ["标签1", "标签2"], "difficulty": "simple", "reasoning": "...", "planned_top_k": 5, "search_strategy": "direct"}}
+{{"rewritten_query": "...", "target_tags": ["标签1", "标签2"], "skip_tag_filter": false, "difficulty": "simple", "reasoning": "...", "planned_top_k": 5, "search_strategy": "direct"}}
 
 只输出JSON，不要其他内容。"""
 
@@ -346,26 +350,29 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
         target_tags = plan.get("target_tags", [])
         if not isinstance(target_tags, list):
             target_tags = []
+        skip_tag_filter = bool(plan.get("skip_tag_filter", False))
 
-        logger.info(f"[PlanRetrieval] query='{rewritten_query[:50]}' tags={target_tags} difficulty={plan.get('difficulty')} top_k={planned_top_k} strategy={search_strategy}")
+        logger.info(f"[PlanRetrieval] query='{rewritten_query[:50]}' tags={target_tags} skip_tag_filter={skip_tag_filter} difficulty={plan.get('difficulty')} top_k={planned_top_k} strategy={search_strategy}")
 
         return {
             "query": rewritten_query,
             "planned_top_k": planned_top_k,
             "search_strategy": search_strategy,
             "target_tags": target_tags,
+            "skip_tag_filter": skip_tag_filter,
             "file_descriptions": file_descriptions,
         }
     except Exception as e:
         logger.error(f"[PlanRetrieval] 规划失败，回退基础改写: {e}")
         return {"query": last_message, "planned_top_k": 5, "search_strategy": "direct",
-                "target_tags": [], "file_descriptions": file_descriptions}
+                "target_tags": [], "skip_tag_filter": False, "file_descriptions": file_descriptions}
 
 
-def route_plan_retrieval(state: ChatState) -> Literal["node_generate", "node_faq_match", "node_no_kb_hit"]:
+def route_plan_retrieval(state: ChatState) -> Literal["node_faq_match", "node_no_kb_hit", "node_retrieve"]:
     """检索规划条件边：
     - file_descriptions 为空 → 知识库无文件，走未命中兜底
-    - target_tags 为空 → 不需要检索，直走 generate（闲聊/工具）
+    - target_tags 为空 + skip_tag_filter=True → 术语/专用名词未匹配标签，跳过标签过滤走全局检索
+    - target_tags 为空 + skip_tag_filter=False → 问题与知识库无关，走未命中兜底
     - target_tags 非空 → 先走 FAQ 匹配
     """
     file_descriptions = state.get("file_descriptions", [])
@@ -375,8 +382,12 @@ def route_plan_retrieval(state: ChatState) -> Literal["node_generate", "node_faq
     target_tags = state.get("target_tags", [])
     if target_tags:
         return "node_faq_match"
-    logger.info("[RoutePlan] target_tags 为空，跳过检索直走生成")
-    return "node_generate"
+    skip_tag_filter = state.get("skip_tag_filter", False)
+    if skip_tag_filter:
+        logger.info("[RoutePlan] target_tags 为空但 skip_tag_filter=True，跳过标签过滤走全局检索")
+        return "node_retrieve"
+    logger.info("[RoutePlan] target_tags 为空，问题与知识库无关，走未命中兜底")
+    return "node_no_kb_hit"
 
 # ================= 敏感话题检测（Jev Noul，LLM 兜底，与主线并行） =================
 # 命中敏感话题时不走 RAG 链路，而是走独立固定话术分支（mode=sensitive）。
@@ -705,20 +716,26 @@ async def node_faq_match(state: ChatState) -> ChatState:
 # ================= RAG节点 —— 检索知识库chunk =================
 retriever = PgHybridRetriever.from_env()
 async def do_retrieval(query: str, uid: str = "", top_k: int = 5, strategy: str = "direct",
-                      target_tags: list = None) -> dict:
+                      target_tags: list = None, skip_tag_filter: bool = False) -> dict:
+    effective_tags = None if skip_tag_filter else target_tags
+    vw, kw = (0.3, 0.7) if skip_tag_filter else (0.6, 0.4)
+    logger.info(f"[do_retrieval] skip_tag_filter={skip_tag_filter} effective_tags={effective_tags} weights=vector:{vw}/keyword:{kw}")
     if strategy == "broad":
         result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
                                          candidate_top_k=max(15, top_k * 2),
                                          coarse_top_k=max(12, top_k * 2),
-                                         target_tags=target_tags)
+                                         target_tags=effective_tags,
+                                         vector_weight=vw, keyword_weight=kw)
     elif strategy == "precise":
         result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
                                          candidate_top_k=max(8, top_k),
                                          coarse_top_k=max(8, top_k),
-                                         target_tags=target_tags)
+                                         target_tags=effective_tags,
+                                         vector_weight=vw, keyword_weight=kw)
     else:
         result = await retriever.search(query, uid=uid, rerank_top_k=top_k,
-                                         target_tags=target_tags)
+                                         target_tags=effective_tags,
+                                         vector_weight=vw, keyword_weight=kw)
     # context 使用命中子块 + 同父块中前后各1个子块（共3个子块），节省 LLM 输入长度
     # sources 保留完整父块，供前端展示来源和数据库持久化
     context_parts = []
@@ -741,11 +758,12 @@ async def node_retrieve(state: ChatState) -> ChatState:
     planned_top_k = state.get("planned_top_k") or 5
     search_strategy = state.get("search_strategy", "direct")
     target_tags = state.get("target_tags") or []
-    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}' uid={uid} top_k={planned_top_k} strategy={search_strategy} tags={target_tags}")
+    skip_tag_filter = state.get("skip_tag_filter", False)
+    logger.info(f"[Retrieve] 开始检索：'{query[:50] if query else '(empty)'}' uid={uid} top_k={planned_top_k} strategy={search_strategy} tags={target_tags} skip_tag_filter={skip_tag_filter}")
 
     try:
         context, sources = await do_retrieval(query, uid=uid, top_k=planned_top_k, strategy=search_strategy,
-                                              target_tags=target_tags)
+                                              target_tags=target_tags, skip_tag_filter=skip_tag_filter)
     except Exception as e:
         logger.error(f"[Retrieve] 检索失败，返回空结果: {e}")
         context, sources = "", []
@@ -1060,7 +1078,7 @@ builder.set_entry_point("node_plan_retrieval")
 builder.add_conditional_edges(
     "node_plan_retrieval",
     route_plan_retrieval,
-    {"node_generate": "node_generate", "node_faq_match": "node_faq_match", "node_no_kb_hit": "node_no_kb_hit"},
+    {"node_faq_match": "node_faq_match", "node_no_kb_hit": "node_no_kb_hit", "node_retrieve": "node_retrieve"},
 )
 
 # FAQ 匹配：命中 → END，未命中 → 检索
@@ -1166,6 +1184,7 @@ def _build_initial_state(session_id: str, message: str, turn_count: int, user: d
         "planned_top_k": None,
         "search_strategy": None,
         "target_tags": None,
+        "skip_tag_filter": None,
     }
 
 
@@ -1578,6 +1597,7 @@ async def session_clear(session_id: str = Body(...), current_user: TokenData = D
         "planned_top_k": None,
         "search_strategy": None,
         "target_tags": None,
+        "skip_tag_filter": None,
     }
     
     await graph.aupdate_state(config, empty_state)
