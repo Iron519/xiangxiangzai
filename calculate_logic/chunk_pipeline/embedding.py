@@ -7,11 +7,30 @@ from typing import Any, Mapping, Sequence
 import httpx
 import psycopg
 from psycopg import sql
+from psycopg_pool import ConnectionPool
 from openai import AsyncOpenAI
 
 from calculate_logic.chunk_pipeline.config import logger
 from calculate_logic.chunk_pipeline.chunk import SemanticChunkOutput
 from calculate_logic.rag.tokenizer import tokenize_for_tsv
+
+# ============================================================
+# PG 连接池（store_semantic_chunks 入库用）
+# ============================================================
+_pg_pool: ConnectionPool | None = None
+
+
+def _get_pg_pool() -> ConnectionPool:
+    global _pg_pool
+    if _pg_pool is None:
+        _pg_pool = ConnectionPool(
+            conninfo=f"host={os.getenv('PG_HOST')} port={int(os.getenv('PG_PORT', '5432'))} "
+                     f"dbname={os.getenv('PG_DATABASE')} user={os.getenv('PG_USER')} "
+                     f"password={os.getenv('PG_PASSWORD')}",
+            min_size=1, max_size=5, open=True,
+            kwargs={"prepare_threshold": 0},
+        )
+    return _pg_pool
 
 # ============================================================
 # Embedding 模型调用（异步，带并发限流，避免与对话侧抢算力）
@@ -382,15 +401,9 @@ def store_semantic_chunks(
     pg_schema = schema or "public"
     pg_table = table or os.getenv("PG_MYAGENT_KB_TABLE")
 
-    conn = psycopg.connect(
-        host=os.getenv("PG_HOST"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname=os.getenv("PG_DATABASE"),
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-    )
+    pool = _get_pg_pool()
+    with pool.connection() as conn:
 
-    with conn:
         table_meta = _load_table_meta(conn, schema=pg_schema, table=pg_table)
         if upsert_key is not None:
             logger.info(f"使用显式 upsert_key={upsert_key} 覆盖自动检测的 {table_meta.upsert_key}")

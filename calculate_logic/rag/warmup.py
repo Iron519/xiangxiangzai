@@ -76,17 +76,6 @@ def _warmup_tag_llm():
         _log_elapsed("ChatTag LLM", t0, False, str(e))
 
 
-def _warmup_rewrite_llm():
-    """预热 Chunk Rewrite LLM 客户端单例。"""
-    from calculate_logic.chunk_pipeline.rewrite import _get_rewrite_llm
-    t0 = time.time()
-    try:
-        _get_rewrite_llm()
-        _log_elapsed("Rewrite LLM", t0, True)
-    except Exception as e:
-        _log_elapsed("Rewrite LLM", t0, False, str(e))
-
-
 def _warmup_retriever_pool():
     """预热检索器 PG 连接池（懒加载 _get_pool → ConnectionPool open=True）。"""
     from calculate_logic.rag.generate_answer import retriever
@@ -96,6 +85,17 @@ def _warmup_retriever_pool():
         _log_elapsed("检索器PG连接池", t0, True)
     except Exception as e:
         _log_elapsed("检索器PG连接池", t0, False, str(e))
+
+
+def _warmup_embedding_pg_pool():
+    """预热入库 PG 连接池（懒加载 _get_pg_pool → ConnectionPool open=True）。"""
+    from calculate_logic.chunk_pipeline.embedding import _get_pg_pool
+    t0 = time.time()
+    try:
+        _get_pg_pool()
+        _log_elapsed("入库PG连接池", t0, True)
+    except Exception as e:
+        _log_elapsed("入库PG连接池", t0, False, str(e))
 
 
 def _warmup_redis_pool():
@@ -222,8 +222,8 @@ def run_sync_warmup():
     _warmup_llm_clients()
     _warmup_jev_client()
     _warmup_tag_llm()
-    _warmup_rewrite_llm()
     _warmup_retriever_pool()
+    _warmup_embedding_pg_pool()
     _warmup_redis_pool()
     logger.info("[Warmup] 同步预热完成")
 

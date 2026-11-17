@@ -69,7 +69,7 @@ def _get_pg_pool():
     return _pg_pool
 
 
-def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 4000) -> str:
+def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 10000) -> str:
     table = _config["PG_MYAGENT_KB_TABLE"]
     try:
         with _get_pg_pool().connection() as conn:
@@ -102,10 +102,6 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
     table = _config["PG_MYAGENT_KB_TABLE"]
     display_name = original_name or file_name
 
-    if has_manual_description(uid, file_name):
-        logger.info(f"[FileTagging] 已有用户手填描述，跳过 LLM 打标: uid={uid} file={file_name}")
-        return None
-
     chunks_text = _load_file_chunks_text(uid, file_name)
     if not chunks_text.strip():
         logger.warning(f"[FileTagging] 文件无内容可读，跳过打标: uid={uid} file={file_name}")
@@ -120,9 +116,9 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
 {chunks_text}
 
 请输出 JSON 格式，包含以下字段：
-- reasoning: 简要说明你为什么打这些标签（1-2句话，解释从文档内容中提取了哪些关键主题）
+- reasoning: 说明你为什么打这些标签（1-2句话，解释从文档内容中提取了哪些关键主题）
 - description: 用1-2句话总结文档的核心内容（不要超过80字）
-- tags: 至少3个、最多5个主题标签（简短关键词，如"HR政策"、"请假流程"、"产品使用指南"）
+- tags: 至少3个，最多20个主题标签，该关键词将用来进行与问题的匹配，直接影响检索结果，所以一定要覆盖完全，丰富且充分，宁滥勿缺
 
 要求：
 1. tags 数量必须 >= 3，不允许为空列表
@@ -139,7 +135,7 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             llm.ainvoke(
                 [SystemMessage(content="你是一个文档分析助手，只输出JSON。"),
                  HumanMessage(content=prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 400},
+                extra_body={"enable_thinking": False, "max_tokens": 800},
             ),
             timeout=30,
         )
@@ -154,7 +150,7 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
         tags = result.get("tags", [])
         if not isinstance(tags, list):
             tags = [str(tags)] if tags else []
-        tags = [str(t).strip() for t in tags if str(t).strip()][:5]
+        tags = [str(t).strip() for t in tags if str(t).strip()][:20]
 
         if len(tags) < 3:
             logger.warning(f"[FileTagging] LLM 返回标签不足3个({len(tags)}个): uid={uid} file={file_name} tags={tags}")
@@ -168,16 +164,26 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             return None
 
         tagged_at = datetime.now(timezone.utc).isoformat()
-        metadata = {
-            "description": description,
-            "tags": tags,
-            "tag_source": "llm_auto",
-            "tagged_at": tagged_at,
-            "tag_reasoning": reasoning,
-        }
 
         with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT metadata FROM {table} WHERE uid = %s AND file_name = %s",
+                    (uid, file_name),
+                )
+                row = cur.fetchone()
+                existing = {}
+                if row and row[0]:
+                    existing = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+
+                metadata = {
+                    "description": existing.get("description") or description,
+                    "tags": tags,
+                    "tag_source": "llm_auto",
+                    "tagged_at": tagged_at,
+                    "tag_reasoning": reasoning,
+                }
+
                 cur.execute(
                     f"UPDATE {table} SET metadata = %s::jsonb "
                     f"WHERE uid = %s AND file_name = %s",
@@ -221,22 +227,18 @@ def has_manual_description(uid: str, file_name: str) -> bool:
 
 def write_manual_description(uid: str, file_name: str, description: str) -> None:
     table = _config["PG_MYAGENT_KB_TABLE"]
-    metadata = {
-        "description": description.strip(),
-        "tags": [],
-        "tag_source": "manual",
-        "tagged_at": datetime.now(timezone.utc).isoformat(),
-    }
     try:
         with _get_pg_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    f"UPDATE {table} SET metadata = %s::jsonb "
+                    f"UPDATE {table} SET metadata = jsonb_set("
+                    f"COALESCE(metadata, '{{}}'::jsonb), "
+                    f"'{{\"description\"}}', %s::jsonb) "
                     f"WHERE uid = %s AND file_name = %s",
-                    (json.dumps(metadata), uid, file_name),
+                    (json.dumps(description.strip()), uid, file_name),
                 )
             conn.commit()
-        logger.info(f"[FileTagging] 用户手填描述已写入: uid={uid} file={file_name}")
+        logger.info(f"[FileTagging] 用户手填描述已写入(仅描述，tags 交给 LLM 打标): uid={uid} file={file_name}")
     except Exception as e:
         logger.error(f"[FileTagging] 写入手填描述失败: uid={uid} file={file_name}: {e}")
 
@@ -254,7 +256,8 @@ def load_file_descriptions(uid: str, admin_uid: str = "") -> list[dict]:
                     f"WHERE uid IN ({placeholders}) "
                     f"AND metadata IS NOT NULL "
                     f"AND metadata != '{{}}'::jsonb "
-                    f"AND metadata->'description' IS NOT NULL",
+                    f"AND metadata->'description' IS NOT NULL "
+                    f"AND (expire_time IS NULL OR expire_time > now())",
                     uids,
                 )
                 rows = cur.fetchall()

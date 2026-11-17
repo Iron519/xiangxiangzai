@@ -295,7 +295,7 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
 【用户当前问题】
 {last_message}
 
-【知识库文件】
+【知识库文件描述】
 {file_list_text}
 
 【可用标签】
@@ -303,9 +303,9 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
 
 请完成以下任务（按顺序）：
 1. 指代消解：仅基于【历史对话】和【用户当前问题】进行代词消解和省略补全，将追问补全为独立完整的问题。如果无历史对话或无需消解，rewritten_query 与用户原始问题一致。
-2. 基于第1步的改写结果（不是原始问题），从【可用标签】中选择与问题相关的标签。
+2. 基于第1步的改写结果（不是原始问题），结合【知识库文件描述】，从【可用标签】中选择与问题相关的标签。
    - 如果有相关标签，填入 target_tags
-   - 如果问题包含术语/专用名词/黑话/缩写等，但现有标签无法匹配，将 target_tags 设为空列表，并将 skip_tag_filter 设为 true——这意味着跳过标签过滤，走全局检索
+   - 如果问题包含行业黑话/缩写/非通用专业术语，且现有标签无法匹配，将 target_tags 设为空列表，并将 skip_tag_filter 设为 true——这意味着跳过标签过滤，走全局检索
    - 如果问题纯粹是闲聊/打招呼/与知识库完全无关，将 target_tags 设为空列表，skip_tag_filter 设为 false
 3. 评估问题难度：simple(单一事实) / moderate(需上下文关联) / complex(多条件/多步骤)
 4. 决定检索切片数量：
