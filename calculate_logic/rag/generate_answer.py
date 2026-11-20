@@ -24,7 +24,7 @@ from psycopg_pool import ConnectionPool
 from typing import TypedDict, Annotated, Literal, Sequence, Optional
 from dotenv import load_dotenv, find_dotenv
 from typesafe_sdk import TypeSafeClient, Noul, Choice
-from calculate_logic.rag.token_usage import log_token_usage
+from table_data.token_usage import log_token_usage, init_accumulator, get_accumulator
 
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
@@ -82,6 +82,11 @@ def get_llm_client():
                 timeout=30,
                 limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             ),
+            http_async_client=httpx.AsyncClient(
+                verify=False,
+                timeout=30,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            ),
             temperature=0.1,
             top_p=0.1,
         )
@@ -97,6 +102,11 @@ def get_fast_llm_client():
             api_key=config["ACCESSCODE"],
             base_url=config["BASE_URL"],
             http_client=httpx.Client(
+                verify=False,
+                timeout=30,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            ),
+            http_async_client=httpx.AsyncClient(
                 verify=False,
                 timeout=30,
                 limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
@@ -208,18 +218,31 @@ def _save_conversation_to_pg(session_id: str, turn_count: int, user_msg: str,  #
                               duration_ms: int | None = None,
                               prompt_token: int | None = None,
                               completion_token: int | None = None,
-                              total_token: int | None = None) :
+                              total_token: int | None = None,
+                              model_name: str = "",
+                              extra_model_tokens: dict | None = None,
+                              tags: list | None = None) :
+    """extra_model_tokens: {model_name: {prompt, completion, total}} 为判断节点等其他模型的 token 消耗，各写一条 token-only 记录。
+    tags: 检索规划阶段匹配到的知识库标签列表，写入 user 行的 tags 列，供标签分布统计。"""
     try:
         with _get_pg_pool().connection() as conn:
             # 依次存入user和assistant的对话内容
+            tags_str = ", ".join(tags) if tags else None
             conn.execute(
-                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'user', %s, %s, %s, NULL, NULL, NULL)",
-                (uid, session_id, turn_count, user_msg, mode, None),
+                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, duration_ms, prompt_token, completion_token, total_token, tags) VALUES (%s, %s, %s, 'user', %s, %s, %s, NULL, NULL, NULL, %s)",
+                (uid, session_id, turn_count, user_msg, mode, None, tags_str),
             )
             conn.execute(
-                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, sources, related_questions, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s, %s)",
-                (uid, session_id, turn_count, ai_msg, mode, json.dumps(sources if sources else []), json.dumps(related_questions if related_questions else []), duration_ms, prompt_token, completion_token, total_token),
+                f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, model_name, sources, related_questions, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (uid, session_id, turn_count, ai_msg, mode, model_name or None, json.dumps(sources if sources else []), json.dumps(related_questions if related_questions else []), duration_ms, prompt_token, completion_token, total_token),
             )
+            # 为其他模型写 token-only 记录（content 为空，不参与对话展示，仅用于 token 统计）
+            if extra_model_tokens:
+                for m_name, m_tokens in extra_model_tokens.items():
+                    conn.execute(
+                        f"INSERT INTO {config["PG_MYAGENT_CONVERSATIONS_TABLE"]} (uid, session_id, turn_count, role, content, mode, model_name, duration_ms, prompt_token, completion_token, total_token) VALUES (%s, %s, %s, 'assistant', '', %s, %s, NULL, %s, %s, %s)",
+                        (uid, session_id, turn_count, mode, m_name, m_tokens.get("prompt"), m_tokens.get("completion"), m_tokens.get("total")),
+                    )
             conn.commit()
         logger.info(f"[PG] 已保存第{turn_count}轮对话: uid={uid} | session={session_id[:3]}... | mode={mode} | duration={duration_ms}ms | model={config.get('TEXT_MODEL','')} | tokens={total_token}")
     except Exception as e:
@@ -264,10 +287,15 @@ def _clean_history_messages(history_messages: list[BaseMessage]) -> list[str]:
 
 # ================= 检索策略规划（指代消解 + 标签匹配 + 检索参数决策，图入口节点） =================
 async def node_plan_retrieval(state: ChatState) -> ChatState:
+    # 并行优化：stream_response 已预计算并注入规划结果时，跳过重复执行
+    if state.get("query") is not None and state.get("file_descriptions") is not None:
+        logger.info(f"[PlanRetrieval] 检测到预计算结果，跳过重复规划")
+        return {}
+
     last_message = state["messages"][-1].content if state.get("messages") else ""
     uid = (state.get("user") or {}).get("uid", "") if isinstance(state.get("user"), dict) else ""
 
-    from calculate_logic.rag.file_tagging import load_file_descriptions, ADMIN_UID
+    from calculate_logic.chunk_pipeline.file_tagging import load_file_descriptions, ADMIN_UID
     file_descriptions = load_file_descriptions(uid, ADMIN_UID)
 
     if not file_descriptions:
@@ -1147,6 +1175,53 @@ def close_checkpointer() -> None:  # 关闭 checkpoint 连接池。供应用关�
         logger.warning(f"[Checkpoint] 关闭连接池失败: {e}")
 
 
+async def close_all_connections() -> None:
+    """统一关闭 generate_answer 模块的所有连接池/客户端。供应用 shutdown 时调用。"""
+    # 1. 关闭 Embedding / Rerank 的 httpx.AsyncClient
+    try:
+        if retriever and retriever.embedding_client:
+            await retriever.embedding_client.close()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭 Embedding 客户端失败: {e}")
+    try:
+        if retriever and retriever.rerank_client:
+            await retriever.rerank_client.close()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭 Rerank 客户端失败: {e}")
+
+    # 2. 关闭检索器 PG 连接池
+    try:
+        if retriever and retriever._pool and not retriever._pool.closed:
+            retriever._pool.close()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭检索器PG连接池失败: {e}")
+
+    # 3. 关闭对话持久化 PG 连接池
+    global _pg_pool
+    try:
+        if _pg_pool is not None and not _pg_pool.closed:
+            _pg_pool.close()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭对话持久化PG连接池失败: {e}")
+    _pg_pool = None
+
+    # 4. 关闭主 LLM / Fast LLM 的 httpx.Client
+    global _llm_client, _fast_llm_client
+    for name, client in [("主LLM", _llm_client), ("FastLLM", _fast_llm_client)]:
+        try:
+            if client and hasattr(client, "http_client") and not client.http_client.is_closed:
+                client.http_client.close()
+        except Exception as e:
+            logger.warning(f"[Shutdown] 关闭{name} httpx.Client 失败: {e}")
+    _llm_client = None
+    _fast_llm_client = None
+
+    # 5. 关闭 Checkpoint PG 连接池
+    close_checkpointer()
+
+    logger.info("[Shutdown] generate_answer 所有连接池已关闭")
+
+
 
 # ================= chat session 管理函数 =================
 
@@ -1240,6 +1315,7 @@ async def chat_stream(
     async def stream_response():
         try:
             start_time = datetime.now(timezone.utc)
+            token_acc = init_accumulator()
             yield f"data: {json.dumps({'type': 'start', 'session_id': session_id, 'turn_count': turn_count, 'tips': WAITING_TIPS, 'tips_interval': WAITING_TIPS_INTERVAL})}\n\n"
             # 判定阶段先发 thinking 提示，避免 start 后到主图启动间出现无反馈空窗
             yield f"data: {json.dumps({'type': 'thinking', 'hint': NODE_HINTS.get('node_plan_retrieval', '收到您的问题')})}\n\n"
@@ -1255,6 +1331,7 @@ async def chat_stream(
                 "final_related_questions": [],
                 "prompt_tokens": None, "completion_tokens": None, "total_tokens": None,
                 "scene_id": "",
+                "target_tags": None,
             }
             QUEUE_END = object()
             persisted = False
@@ -1269,6 +1346,10 @@ async def chat_stream(
                     elapsed_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
                     logger.info(f"[Timing] 第{turn_count}轮 {ctx_['final_mode']} 模式耗时 {elapsed_ms}ms")
                     clean_answer_for_pg, _ = _parse_related_questions(ctx_["full_answer"])
+                    # 主模型取 token 最多的，其余模型作为 extra 分别写入
+                    primary_model = token_acc.primary_model or ctx_.get("model_name", "")
+                    primary_entry = token_acc.models.get(primary_model, {})
+                    extra = {k: v for k, v in token_acc.models.items() if k != primary_model}
                     _save_conversation_to_pg(
                         session_id=session_id,
                         turn_count=turn_count,
@@ -1279,9 +1360,12 @@ async def chat_stream(
                         sources=ctx_["final_sources"],
                         related_questions=ctx_.get("final_related_questions", []),
                         duration_ms=elapsed_ms,
-                        prompt_token=ctx_["prompt_tokens"],
-                        completion_token=ctx_["completion_tokens"],
-                        total_token=ctx_["total_tokens"],
+                        prompt_token=primary_entry.get("prompt") or None,
+                        completion_token=primary_entry.get("completion") or None,
+                        total_token=primary_entry.get("total") or None,
+                        model_name=primary_model,
+                        extra_model_tokens=extra if extra else None,
+                        tags=ctx_.get("target_tags"),
                     )
                     _update_session_timestamp(uid, session_id, turn_count)
                 except Exception as pg_err:
@@ -1315,6 +1399,12 @@ async def chat_stream(
                             node_name = event.get("name", "")
                             output = event.get("data", {}).get("output", {})
 
+                            if node_name == "node_plan_retrieval":
+                                # 捕获检索规划匹配的标签（预计算失败时主图重新执行会走到这里）
+                                plan_output = output if isinstance(output, dict) else {}
+                                if plan_output.get("target_tags") is not None:
+                                    ctx["target_tags"] = plan_output["target_tags"]
+
                             if node_name == "node_generate":
                                 # node_generate 在工具链路中会被多次执行：pass1 返回带 tool_calls 的
                                 # AIMessage → 路由到 tool_node → 回到 node_generate；pass2 才返回最终文本回答。
@@ -1347,10 +1437,12 @@ async def chat_stream(
                                     _model = (getattr(last_msg, "response_metadata", None) or {}).get("model_name") or \
                                              (getattr(last_msg, "response_metadata", None) or {}).get("model") or \
                                              config.get("TEXT_MODEL", "")
+                                    ctx["model_name"] = _model
                                     logger.info(
                                         f"[node_generate] model={_model} "
                                         f"prompt={ctx['prompt_tokens']} completion={ctx['completion_tokens']} total={ctx['total_tokens']}"
                                     )
+                                    token_acc.add(_model, ctx['prompt_tokens'] or 0, ctx['completion_tokens'] or 0, ctx['total_tokens'] or 0)
                                     # 解析相关追问（场景命中时放宽上限，容纳场景额外追问）
                                     max_q = 6 if ctx.get("scene_id") else 3
                                     clean_answer, related_questions = _parse_related_questions(ctx["full_answer"], max_count=max_q)
@@ -1401,32 +1493,45 @@ async def chat_stream(
                         pass
                     await q.put(QUEUE_END)
 
-            # ── 敏感/场景判定（并行，先决出结果再启动主图）──
-            # 两者都是小模型+极小输出，并行跑，等待成本≈慢者一趟，几乎不增加延迟。
-            # - 敏感命中：不启动主图，直接返回固定话术。
-            # - 场景命中：结果注入 initial_state 的 scene 字段，node_generate 据此套用场景模板。
-            # 场景模板列表只加载一次，同时传给 _judge_scene 和 initial_state，避免重复查库。
+            # ── 敏感/场景判定 + 检索规划（三者并行，先等敏感/场景快出结果，再等规划完成）──
+            # 三者都是独立任务，无依赖关系，可安全并行：
+            # - 敏感判定：小模型，~1.9s
+            # - 场景判定：小模型，~1.9s
+            # - 检索规划：Fast LLM，~4.1s（最慢，但与判定无依赖）
+            # 策略：先等敏感/场景（快），命中敏感则取消规划任务；未命中则等规划完成并注入 state，
+            # 使主图启动时 node_plan_retrieval 检测到预计算结果直接跳过，节省 ~1.9s 串行等待。
             scenes = _load_scenes()
             initial_state["scenes"] = scenes
             sens_task = asyncio.create_task(_judge_sensitive(message))
             scene_task = asyncio.create_task(_judge_scene(message, scenes))
-            scene_id = ""
-            try:
-                await asyncio.gather(sens_task, scene_task, return_exceptions=True)
-                scene_id = scene_task.result() if not isinstance(scene_task.exception(), Exception) else ""
-            except Exception as e:
-                logger.warning(f"[SceneJudge] 判定读取失败，按未命中放行: {e}")
-            # 确保 sens_task 已完成（gather with return_exceptions=True 已保证）
+            plan_task = asyncio.create_task(node_plan_retrieval(initial_state))
+
+            # 先等敏感/场景判定完成（~1.9s，两者都比 plan_retrieval 快）
+            await asyncio.gather(sens_task, scene_task, return_exceptions=True)
+            scene_id = scene_task.result() if not isinstance(scene_task.exception(), Exception) else ""
             sens_result = sens_task.result() if not isinstance(sens_task.exception(), Exception) else "miss"
+
             if sens_result == "hit":
                 hit = True
-                logger.warning("[Sensitive] 命中敏感话题，返回固定话术")
+                if not plan_task.done():
+                    plan_task.cancel()
+                logger.warning("[Sensitive] 命中敏感话题，返回固定话术（已取消并行规划任务）")
             else:
                 hit = False
                 if scene_id:
                     initial_state["scene"] = scene_id
                     ctx["scene_id"] = scene_id
                     logger.info(f"[SceneJudge] 命中场景: {scene_id}")
+                # 等待检索规划完成（可能已完成，也可能还需等待 ~2s）
+                try:
+                    plan_result = await plan_task
+                    if isinstance(plan_result, dict) and plan_result:
+                        initial_state.update(plan_result)
+                        logger.info(f"[PlanRetrieval] 预计算结果已注入 initial_state，主图将跳过规划节点")
+                except Exception as e:
+                    logger.warning(f"[PlanRetrieval] 预计算失败，将由主图重新执行: {e}")
+                # 从预计算结果中提取 target_tags（若主图重新执行 plan_retrieval，on_chain_end 会覆盖）
+                ctx["target_tags"] = initial_state.get("target_tags")
 
             # ── 主图事件循环 + 并行消费（敏感命中则跳过主图）──
             GRAPH_TIMEOUT = 60  # 整个主图执行超时上限（秒），防止 LLM/API 挂死导致前端永远空转

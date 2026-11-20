@@ -65,17 +65,6 @@ def _warmup_jev_client():
         _log_elapsed("Jev(TypeSafe)客户端", t0, False, str(e))
 
 
-def _warmup_tag_llm():
-    """预热 Chat Tag LLM 客户端单例。"""
-    from table_data.chat_tag import _get_tag_llm
-    t0 = time.time()
-    try:
-        _get_tag_llm()
-        _log_elapsed("ChatTag LLM", t0, True)
-    except Exception as e:
-        _log_elapsed("ChatTag LLM", t0, False, str(e))
-
-
 def _warmup_retriever_pool():
     """预热检索器 PG 连接池（懒加载 _get_pool → ConnectionPool open=True）。"""
     from calculate_logic.rag.generate_answer import retriever
@@ -96,6 +85,18 @@ def _warmup_embedding_pg_pool():
         _log_elapsed("入库PG连接池", t0, True)
     except Exception as e:
         _log_elapsed("入库PG连接池", t0, False, str(e))
+
+
+def _warmup_conversation_pg_pool():
+    """预热对话持久化 PG 连接池（懒加载 _get_pg_pool → ConnectionPool open=True）。
+    file_tagging 复用此池，预热后打标请求也零冷启动。"""
+    from calculate_logic.rag.generate_answer import _get_pg_pool
+    t0 = time.time()
+    try:
+        _get_pg_pool()
+        _log_elapsed("对话持久化PG连接池", t0, True)
+    except Exception as e:
+        _log_elapsed("对话持久化PG连接池", t0, False, str(e))
 
 
 def _warmup_redis_pool():
@@ -221,9 +222,9 @@ def run_sync_warmup():
     _warmup_bm25_indices()
     _warmup_llm_clients()
     _warmup_jev_client()
-    _warmup_tag_llm()
     _warmup_retriever_pool()
     _warmup_embedding_pg_pool()
+    _warmup_conversation_pg_pool()
     _warmup_redis_pool()
     logger.info("[Warmup] 同步预热完成")
 

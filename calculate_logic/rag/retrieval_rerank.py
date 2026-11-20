@@ -21,7 +21,7 @@ from pgvector.psycopg import register_vector
 from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 
-from calculate_logic.rag.tokenizer import tokenize_for_tsquery
+from calculate_logic.fetch_knowledge.tokenizer import tokenize_for_tsquery
 
 load_dotenv(find_dotenv())
 
@@ -315,7 +315,7 @@ class CustomRerankClient:
 
     async def close(self) -> None:
         if self._client is not None and not self._client.is_closed:
-            await self._client.close()
+            await self._client.aclose()
             self._client = None
 
 

@@ -4,10 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-import httpx
 import psycopg
-from psycopg_pool import ConnectionPool
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from concurrent_log_handler import ConcurrentRotatingFileHandler
 from dotenv import load_dotenv, find_dotenv
@@ -36,37 +33,17 @@ _config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 ADMIN_UID = os.getenv("ADMIN_UID", "admin").strip()
 
-_fast_llm_client = None
+
 def get_fast_llm_client():
-    global _fast_llm_client
-    if _fast_llm_client is None:
-        _fast_llm_client = ChatOpenAI(
-            model=_config.get("FAST_MODEL") or _config["TEXT_MODEL"],
-            api_key=_config["ACCESSCODE"],
-            base_url=_config["BASE_URL"],
-            http_client=httpx.Client(
-                verify=False,
-                timeout=30,
-                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-            ),
-            temperature=0.1,
-            top_p=0.1,
-        )
-    return _fast_llm_client
+    """复用 generate_answer 的 Fast LLM 客户端单例，避免重复建池。"""
+    from calculate_logic.rag.generate_answer import get_fast_llm_client as _get
+    return _get()
 
 
-_pg_pool = None
 def _get_pg_pool():
-    global _pg_pool
-    if _pg_pool is None:
-        _pg_pool = ConnectionPool(
-            conninfo=f"host={_config['PG_HOST']} port={int(_config['PG_PORT'])} "
-                     f"dbname={_config['PG_DATABASE']} user={_config['PG_USER']} "
-                     f"password={_config['PG_PASSWORD']}",
-            min_size=1, max_size=5, open=True,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-        )
-    return _pg_pool
+    """复用 generate_answer 的 PG 连接池，避免重复建池。"""
+    from calculate_logic.rag.generate_answer import _get_pg_pool as _get
+    return _get()
 
 
 def _load_file_chunks_text(uid: str, file_name: str, max_chars: int = 10000) -> str:

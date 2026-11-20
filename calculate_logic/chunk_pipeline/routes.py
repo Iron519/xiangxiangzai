@@ -387,9 +387,9 @@ async def _background_process(task_id: str, save_path: str, original_name: str, 
             logger.info(f"[Task {task_id}] 注入完成！共 {summary.get('chunk_count', 0)} 个切片")
 
             _save_name = os.path.basename(save_path)
-            from calculate_logic.rag.file_tagging import generate_file_description
+            from calculate_logic.chunk_pipeline.file_tagging import generate_file_description
             if file_description and file_description.strip():
-                from calculate_logic.rag.file_tagging import write_manual_description
+                from calculate_logic.chunk_pipeline.file_tagging import write_manual_description
                 write_manual_description(uid, _save_name, file_description)
             asyncio.create_task(generate_file_description(uid, _save_name, original_name))
     except TaskCancelled:

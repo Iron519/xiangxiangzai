@@ -17,11 +17,10 @@ PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from calculate_logic.rag.generate_answer import router as chat_router, close_checkpointer, preload_faq_index
-from calculate_logic.rag.warmup import run_sync_warmup, run_async_warmup
-from table_data.chat_tag import tag_loop
+from calculate_logic.rag.generate_answer import router as chat_router, close_all_connections, preload_faq_index
+from app.warmup import run_sync_warmup, run_async_warmup
+from table_data.chat_report import router as report_router, close_report_pool
 from calculate_logic.chunk_pipeline.routes import router as chunk_router
-from table_data.chat_report import router as report_router
 from calculate_logic.chunk_pipeline.routes import recover_queued_tasks
 from sso_did.auth_service import auth_router, users_router
 from sso_did.auth import get_current_user, TokenData
@@ -112,25 +111,22 @@ async def _warmup_on_startup():
         logger.error(f"[Startup] 异步预热失败: {e}")
 
 
-@app.on_event("startup")
-async def _start_chat_tag_loop():
-    """启动定时打标后台任务，每 N 小时对未打标的 user 消息做业务标签+情绪标注。
-
-    只在第一个 worker 上启动（用全局标记避免多 worker 重复）。
-    """
-    if not getattr(app, "_tag_loop_started", False):
-        app._tag_loop_started = True
-        asyncio.create_task(tag_loop())
-        logger.info("[Startup] 定时打标任务已启动")
-
-
 @app.on_event("shutdown")
-async def _close_checkpointer_on_shutdown():
-    """关闭 LangGraph checkpoint 的 PG 连接池，避免 worker 退出时连接泄漏。"""
+async def _close_connections_on_shutdown():
+    """关闭所有连接池/客户端，避免 worker 退出时连接泄漏。"""
     try:
-        close_checkpointer()
+        await close_all_connections()
     except Exception as e:
-        logger.warning(f"[Shutdown] 关闭 checkpoint 连接池失败: {e}")
+        logger.warning(f"[Shutdown] 关闭 generate_answer 连接池失败: {e}")
+    try:
+        from calculate_logic.rag.scene_template_mgmt import close_pool as close_scene_pool
+        close_scene_pool()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭场景模板PG连接池失败: {e}")
+    try:
+        close_report_pool()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭报表PG连接池失败: {e}")
 
 
 # ================= MyAgent 应用API =================

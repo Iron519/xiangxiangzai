@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 import psycopg
+from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv, find_dotenv
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -69,14 +70,27 @@ class SceneTemplateCreate(BaseModel):
 
 
 # ================= 数据访问 =================
-def _pg_conn():
-    return psycopg.connect(
-        host=os.getenv("PG_HOST"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname=os.getenv("PG_DATABASE"),
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-    )
+_pg_pool = None
+def _get_pool():
+    global _pg_pool
+    if _pg_pool is None:
+        _pg_pool = ConnectionPool(
+            conninfo=f"host={os.getenv('PG_HOST')} port={int(os.getenv('PG_PORT', '5432'))} "
+                     f"dbname={os.getenv('PG_DATABASE')} user={os.getenv('PG_USER')} "
+                     f"password={os.getenv('PG_PASSWORD')}",
+            min_size=1, max_size=3, open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+    return _pg_pool
+
+def close_pool():
+    global _pg_pool
+    if _pg_pool is not None:
+        try:
+            _pg_pool.close()
+        except Exception:
+            pass
+        _pg_pool = None
 
 
 # ================= 路由 =================
@@ -86,7 +100,7 @@ router = APIRouter(prefix="/api/v1/scene-templates", tags=["SceneTemplate"])
 @router.get("", response_model=Response)
 async def list_scene_templates(_: TokenData = Depends(get_current_user)):
     """查询全部场景模板（按 id 正序）。"""
-    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
             f"SELECT id, scene_id, name, trigger, answer_template, answer_mode, followup_prompt, created_at, updated_at "
             f"FROM {SCENE_TABLE} ORDER BY id ASC"
@@ -115,7 +129,7 @@ async def create_scene_template(body: SceneTemplateCreate, current_user: TokenDa
     name = body.name.strip()
     if not sid or not name:
         return Response.fail(code=400, message="scene_id 和 name 不能为空")
-    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
             f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (sid,),
         )
@@ -142,7 +156,7 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
     name = body.name.strip()
     if not sid or not name:
         return Response.fail(code=400, message="scene_id 和 name 不能为空")
-    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
         if not cur.fetchone():
             conn.commit()
@@ -162,7 +176,7 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
 @router.delete("/{scene_id}", response_model=Response)
 async def delete_scene_template(scene_id: str, current_user: TokenData = Depends(get_current_user)):
     """删除单条场景模板（删除即停用：判定表将不再包含该场景）。"""
-    with _pg_conn() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+    with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
         if not cur.fetchone():
             conn.commit()

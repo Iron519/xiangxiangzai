@@ -128,6 +128,7 @@ DDL_STATEMENTS = [
         emotion       TEXT DEFAULT NULL,
         sources       JSONB DEFAULT NULL,
         mode          TEXT DEFAULT NULL,
+        model_name    TEXT DEFAULT NULL,
         duration_ms   INT DEFAULT NULL,
         completion_token   BIGINT DEFAULT 0,
         prompt_token   BIGINT DEFAULT 0,

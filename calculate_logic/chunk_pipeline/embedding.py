@@ -12,7 +12,7 @@ from openai import AsyncOpenAI
 
 from calculate_logic.chunk_pipeline.config import logger
 from calculate_logic.chunk_pipeline.chunk import SemanticChunkOutput
-from calculate_logic.rag.tokenizer import tokenize_for_tsv
+from calculate_logic.fetch_knowledge.tokenizer import tokenize_for_tsv
 
 # ============================================================
 # PG 连接池（store_semantic_chunks 入库用）

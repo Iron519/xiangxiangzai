@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 import psycopg
+from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
@@ -39,18 +40,38 @@ logger.info(f"日志文件: {LOG_PATH}")
 
 # ================= PG 配置 =================
 CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "")
-def _pg_conn():
-    return psycopg.connect(
-        host=os.getenv("PG_HOST"),
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname=os.getenv("PG_DATABASE"),
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-    )
+
+_report_pool: ConnectionPool | None = None
+
+def _get_pool() -> ConnectionPool:
+    global _report_pool
+    if _report_pool is None:
+        _report_pool = ConnectionPool(
+            conninfo=(
+                f"host={os.getenv('PG_HOST')} port={int(os.getenv('PG_PORT', '5432'))} "
+                f"dbname={os.getenv('PG_DATABASE')} user={os.getenv('PG_USER')} "
+                f"password={os.getenv('PG_PASSWORD')}"
+            ),
+            min_size=1,
+            max_size=5,
+            open=True,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+        )
+        logger.debug("[DataReport] PG 连接池已创建: min=1 max=5")
+    return _report_pool
+
+def close_report_pool() -> None:
+    global _report_pool
+    if _report_pool is not None:
+        try:
+            _report_pool.close()
+        except Exception as e:
+            logger.warning(f"[DataReport] 关闭连接池失败: {e}")
+        _report_pool = None
 
 
-def _range_conds(start_date: str | None = None, end_date: str | None = None) -> tuple[list[str], list]:
-    """构造 created_at 的时间过滤条件（不含 WHERE 关键字）。start_date/end_date 为 'YYYY-MM-DD'。"""
+def _range_conds(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> tuple[list[str], list]:
+    """构造 created_at 的时间过滤条件（不含 WHERE 关键字）。start_date/end_date 为 'YYYY-MM-DD'。uid 非空时追加 uid 过滤。"""
     conds: list[str] = []
     params: list = []
     if start_date:
@@ -59,20 +80,23 @@ def _range_conds(start_date: str | None = None, end_date: str | None = None) -> 
     if end_date:
         conds.append("created_at < (%s::date + INTERVAL '1 day')")
         params.append(end_date)
+    if uid:
+        conds.append("uid = %s")
+        params.append(uid)
     return conds, params
 
 
-def _range_clause(start_date: str | None = None, end_date: str | None = None) -> tuple[str, list]:
+def _range_clause(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> tuple[str, list]:
     """构造 created_at 的时间过滤子句（含 WHERE 前缀，仅当有条件时）。"""
-    conds, params = _range_conds(start_date, end_date)
+    conds, params = _range_conds(start_date, end_date, uid)
     return (" WHERE " + " AND ".join(conds) if conds else ""), params
 
 # ================= 数据分析函数 =================
 def get_total_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> dict:
     """基础统计：总对话数、总消息数、日均使用量。"""
     try:
-        range_sql, range_params = _range_clause(start_date, end_date)
-        with _pg_conn() as conn:
+        range_sql, range_params = _range_clause(start_date, end_date, uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -90,27 +114,37 @@ def get_total_stats(start_date: str | None = None, end_date: str | None = None, 
                 """, range_params)
                 row = cur.fetchone()
 
-                # 近7天活跃会话数（叠加所选时间范围）
-                conds = ["created_at >= NOW() - INTERVAL '7 days'"]
+                # 近7天活跃会话数（叠加所选时间范围 + uid 过滤）
+                conds7 = ["created_at >= NOW() - INTERVAL '7 days'"]
                 params7 = []
                 if start_date:
-                    conds.append("created_at >= %s::date")
+                    conds7.append("created_at >= %s::date")
                     params7.append(start_date)
                 if end_date:
-                    conds.append("created_at < (%s::date + INTERVAL '1 day')")
+                    conds7.append("created_at < (%s::date + INTERVAL '1 day')")
                     params7.append(end_date)
+                if uid:
+                    conds7.append("uid = %s")
+                    params7.append(uid)
                 cur.execute(f"""
                     SELECT COUNT(DISTINCT session_id)
                     FROM {CONV_TABLE}
-                    WHERE {' AND '.join(conds)}
+                    WHERE {' AND '.join(conds7)}
                 """, params7)
                 active_sessions_7d = cur.fetchone()[0] or 0
 
-                # 最早和最晚记录时间
+                # 最早和最晚记录时间（叠加 uid 过滤）
+                minmax_conds = []
+                minmax_params = []
+                if uid:
+                    minmax_conds.append("uid = %s")
+                    minmax_params.append(uid)
+                minmax_where = (" WHERE " + " AND ".join(minmax_conds) if minmax_conds else "")
                 cur.execute(f"""
                     SELECT MIN(created_at), MAX(created_at)
                     FROM {CONV_TABLE}
-                """)
+                    {minmax_where}
+                """, minmax_params)
                 min_ts, max_ts = cur.fetchone()
 
         total_messages = row[0] or 0
@@ -151,8 +185,9 @@ def get_total_stats(start_date: str | None = None, end_date: str | None = None, 
 def get_mode_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """各对话模式的统计。"""
     try:
-        range_sql, range_params = _range_clause(start_date, end_date)
-        with _pg_conn() as conn:
+        conds, range_params = _range_conds(start_date, end_date, uid)
+        conds.append("mode IS NOT NULL AND mode != ''")
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -161,8 +196,7 @@ def get_mode_stats(start_date: str | None = None, end_date: str | None = None, u
                         COUNT(DISTINCT session_id)                  AS session_count,
                         ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL), 1) AS avg_duration_ms
                     FROM {CONV_TABLE}
-                    {range_sql}
-                    AND mode IS NOT NULL AND mode != ''
+                    WHERE {' AND '.join(conds)}
                     GROUP BY mode
                     ORDER BY message_count DESC
                 """, range_params)
@@ -185,12 +219,15 @@ def get_mode_stats(start_date: str | None = None, end_date: str | None = None, u
 def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """近 N 天每天的消息量和响应耗时趋势。"""
     try:
-        base_sql, base_params = _range_clause(start_date, end_date)
+        base_sql, base_params = _range_clause(start_date, end_date, uid)
         # 无外部范围时，退回默认近 N 天窗口
         if not base_sql:
-            base_sql, base_params = (
-                f" WHERE created_at >= NOW() - INTERVAL '{days} days'", [])
-        with _pg_conn() as conn:
+            base_sql = f" WHERE created_at >= NOW() - INTERVAL '{days} days'"
+            base_params = []
+            if uid:
+                base_sql += " AND uid = %s"
+                base_params.append(uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -224,8 +261,8 @@ def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str
 def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """最活跃的会话 TOP N。"""
     try:
-        range_sql, range_params = _range_clause(start_date, end_date)
-        with _pg_conn() as conn:
+        range_sql, range_params = _range_clause(start_date, end_date, uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -260,10 +297,10 @@ def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_dat
 def get_emotion_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """情绪分布（用于扇形图）。仅统计已打标的数据，排除 emotion 为空的记录。"""
     try:
-        conds, range_params = _range_conds(start_date, end_date)
+        conds, range_params = _range_conds(start_date, end_date, uid)
         conds.append("role = 'user'")
         conds.append("emotion IS NOT NULL AND emotion != ''")
-        with _pg_conn() as conn:
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -282,21 +319,28 @@ def get_emotion_distribution(start_date: str | None = None, end_date: str | None
 
 
 def get_tag_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
-    """主题标签分布（用于条形图）。多标签按英文逗号拆开分别计数。"""
+    """主题标签分布（用于条形图）。多标签按英文逗号拆开分别计数；空标签归为"闲聊"。"""
     try:
-        conds, range_params = _range_conds(start_date, end_date)
+        conds, range_params = _range_conds(start_date, end_date, uid)
         conds.append("role = 'user'")
-        with _pg_conn() as conn:
+        cond_clause = ' AND '.join(conds)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
-                    SELECT
-                        TRIM(tag)                AS tag_name,
-                        COUNT(*)                 AS count
-                    FROM {CONV_TABLE},
-                         LATERAL unnest(string_to_array(tags, ',')) AS tag
-                    WHERE {' AND '.join(conds)} AND tags IS NOT NULL AND tags != ''
+                    SELECT tag_name, SUM(cnt) AS total
+                    FROM (
+                        SELECT TRIM(tag) AS tag_name, COUNT(*) AS cnt
+                        FROM {CONV_TABLE},
+                             LATERAL unnest(string_to_array(tags, ',')) AS tag
+                        WHERE {cond_clause} AND tags IS NOT NULL AND tags != ''
+                        GROUP BY tag_name
+                        UNION ALL
+                        SELECT '闲聊' AS tag_name, COUNT(*) AS cnt
+                        FROM {CONV_TABLE}
+                        WHERE {cond_clause} AND (tags IS NULL OR tags = '')
+                    ) t
                     GROUP BY tag_name
-                    ORDER BY count DESC
+                    ORDER BY total DESC
                 """, range_params)
                 rows = cur.fetchall()
         return [{"name": row[0], "value": row[1]} for row in rows]
@@ -308,11 +352,14 @@ def get_tag_distribution(start_date: str | None = None, end_date: str | None = N
 def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """按天统计消极/紧急情绪数量趋势（用于 Negative Trend 折线图）。"""
     try:
-        base_sql, base_params = _range_clause(start_date, end_date)
+        base_sql, base_params = _range_clause(start_date, end_date, uid)
         if not base_sql:
-            base_sql, base_params = (
-                f" WHERE created_at >= NOW() - INTERVAL '{days} days'", [])
-        with _pg_conn() as conn:
+            base_sql = f" WHERE created_at >= NOW() - INTERVAL '{days} days'"
+            base_params = []
+            if uid:
+                base_sql += " AND uid = %s"
+                base_params.append(uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -341,21 +388,21 @@ def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: 
 
 
 def get_model_token_breakdown(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
-    """按模型(mode)统计Token消耗分布（用于模型Token构成排行榜）。"""
+    """按大模型名称统计Token消耗分布（用于模型Token构成排行榜）。仅统计有 model_name 的记录。"""
     try:
-        conds, range_params = _range_conds(start_date, end_date)
+        conds, range_params = _range_conds(start_date, end_date, uid)
         conds.append("role = 'assistant'")
-        conds.append("mode IS NOT NULL AND mode != ''")
-        with _pg_conn() as conn:
+        conds.append("model_name IS NOT NULL AND TRIM(model_name) != ''")
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
-                        mode,
+                        TRIM(model_name)                    AS model,
                         COALESCE(SUM(total_token), 0)     AS total_tokens,
                         COUNT(*)                           AS message_count
                     FROM {CONV_TABLE}
                     WHERE {' AND '.join(conds)}
-                    GROUP BY mode
+                    GROUP BY model
                     ORDER BY total_tokens DESC
                 """, range_params)
                 rows = cur.fetchall()
@@ -375,9 +422,9 @@ def get_model_token_breakdown(start_date: str | None = None, end_date: str | Non
 def get_negative_feedback_stats(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> dict:
     """负反馈统计：点踩总数、占比、原因分布。"""
     try:
-        conds, range_params = _range_conds(start_date, end_date)
+        conds, range_params = _range_conds(start_date, end_date, uid)
         conds.append("role = 'assistant'")
-        with _pg_conn() as conn:
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -420,8 +467,8 @@ def get_negative_feedback_stats(start_date: str | None = None, end_date: str | N
 def get_hourly_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """按小时分布（用于折线/柱状图）。"""
     try:
-        range_sql, range_params = _range_clause(start_date, end_date)
-        with _pg_conn() as conn:
+        range_sql, range_params = _range_clause(start_date, end_date, uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -442,11 +489,14 @@ def get_hourly_distribution(start_date: str | None = None, end_date: str | None 
 def get_duration_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """每日平均耗时趋势（用于折线图）。"""
     try:
-        base_sql, base_params = _range_clause(start_date, end_date)
+        base_sql, base_params = _range_clause(start_date, end_date, uid)
         if not base_sql:
-            base_sql, base_params = (
-                f" WHERE created_at >= NOW() - INTERVAL '{days} days'", [])
-        with _pg_conn() as conn:
+            base_sql = f" WHERE created_at >= NOW() - INTERVAL '{days} days'"
+            base_params = []
+            if uid:
+                base_sql += " AND uid = %s"
+                base_params.append(uid)
+        with _get_pool().connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"""
                     SELECT
@@ -479,10 +529,14 @@ router = APIRouter()
 @router.get("/stats/overview")
 async def stats_overview(start_date: str | None = Query(default=None),
                          end_date: str | None = Query(default=None),
+                         role: str = Query(default="admin"),
                          current_user: TokenData = Depends(get_current_user)):
-    """获取概览统计。admin 看全部，普通用户只看自己的数据。"""
-    uid = "" if current_user.is_admin else current_user.uid
-    logger.info(f"[API] 获取概览统计 range={start_date}~{end_date} uid={uid or 'ALL'}")
+    """获取概览统计。role=admin 看全部数据，role=user 只看自己。"""
+    if role == "user":
+        uid = current_user.uid
+    else:
+        uid = ""
+    logger.info(f"[API] 获取概览统计 range={start_date}~{end_date} role={role} uid={uid or 'ALL'}")
     try:
         total_stats = get_total_stats(start_date=start_date, end_date=end_date, uid=uid)
         mode_stats = get_mode_stats(start_date=start_date, end_date=end_date, uid=uid)
@@ -516,6 +570,26 @@ async def stats_overview(start_date: str | None = Query(default=None),
             status_code=500,
             content={"success": False, "error": str(e)},
         )
+
+
+@router.get("/tag/status")
+async def tag_status(current_user: TokenData = Depends(get_current_user)):
+    """查询标签标注状态和待标注存量数量。"""
+    try:
+        with _get_pool().connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT COUNT(*) FROM {CONV_TABLE} "
+                f"WHERE role = 'user' AND (tags IS NULL OR tags = '')"
+            )
+            pending = cur.fetchone()[0]
+        return {
+            "success": True,
+            "pending": pending,
+            "mode": "realtime",
+            "message": "标签已随检索规划实时写入，无需手动触发" if pending == 0 else f"仍有 {pending} 条历史消息未标注",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ================= 本地测试 =================
