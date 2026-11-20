@@ -296,7 +296,7 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
     uid = (state.get("user") or {}).get("uid", "") if isinstance(state.get("user"), dict) else ""
 
     from calculate_logic.chunk_pipeline.file_tagging import load_file_descriptions, ADMIN_UID
-    file_descriptions = load_file_descriptions(uid, ADMIN_UID)
+    file_descriptions = await asyncio.to_thread(load_file_descriptions, uid, ADMIN_UID)
 
     if not file_descriptions:
         logger.info("[PlanRetrieval] 无文件描述，不需要检索")
@@ -766,12 +766,19 @@ async def do_retrieval(query: str, uid: str = "", top_k: int = 5, strategy: str 
                                          vector_weight=vw, keyword_weight=kw)
     # context 使用命中子块 + 同父块中前后各1个子块（共3个子块），节省 LLM 输入长度
     # sources 保留完整父块，供前端展示来源和数据库持久化
+    # 并行拉取所有 hit 的 sibling，避免串行 N 次 DB 往返
+    hits = result.final_results
+    sibling_results = await asyncio.gather(
+        *[asyncio.to_thread(
+            retriever._fetch_sibling_child_contents,
+            group_id=hit.group_id, internal_id=hit.internal_id, uid=uid
+        ) for hit in hits],
+        return_exceptions=True
+    )
     context_parts = []
     sources = []
-    for hit in result.final_results:
-        sibling_text = retriever._fetch_sibling_child_contents(
-            group_id=hit.group_id, internal_id=hit.internal_id, uid=uid
-        )
+    for i, hit in enumerate(hits):
+        sibling_text = sibling_results[i] if not isinstance(sibling_results[i], Exception) else None
         if sibling_text:
             context_parts.append(sibling_text)
         else:
@@ -874,7 +881,7 @@ def _render_profile(profile: dict | None) -> str:
     lines = []
     bi = profile.get("basic_info") or {}
     if isinstance(bi, dict):
-        for k, label in [("department", "部门"), ("role", "职位"), ("location", "所在地")]:
+        for k, label in [("region", "地区"), ("age_group", "年龄段"), ("life_stage", "人生阶段")]:
             v = bi.get(k)
             if v:
                 lines.append(f"- {label}: {v}")
@@ -1318,28 +1325,38 @@ async def chat_stream(
 
     config = _make_config(session_id)
 
-    current_state = await _get_current_state(session_id)
+    # ── 并行：checkpoint 状态 + 用户信息（含画像）同时拉取 ──
+    # _get_current_state 是 async（LangGraph checkpoint），用户查询是 sync PG，
+    # 用 to_thread 包装后 asyncio.gather 并行执行，节省 ~2 次 DB 串行往返。
+    async def _fetch_user_and_profile():
+        """合并 get_user_by_uid + get_user_profile 为单次 PG 查询，用已预热的对话持久化连接池。"""
+        try:
+            from sso_did.auth_service import USER_TABLE as _USER_TBL
+            with _get_pg_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+                cur.execute(
+                    f"SELECT uid, username, profile FROM {_USER_TBL} WHERE uid=%s AND deleted=false",
+                    (uid,)
+                )
+                row = cur.fetchone()
+            if row:
+                user_dict_local = {
+                    "uid": uid,
+                    "username": row.get("username") or current_user.username or uid,
+                }
+                profile_data = row.get("profile")
+                if profile_data:
+                    user_dict_local["profile"] = profile_data if isinstance(profile_data, dict) else json.loads(profile_data)
+                return user_dict_local
+        except Exception as e:
+            logger.warning(f"[ChatStream] 取用户信息+画像失败，退化为 token 层: {e}")
+        return {"uid": uid, "username": current_user.username or uid}
+
+    state_task = asyncio.create_task(_get_current_state(session_id))
+    user_task = asyncio.create_task(_fetch_user_and_profile())
+    current_state = await state_task
+    user_dict = await user_task
+
     turn_count = (current_state.get("turn_count", 0) + 1) if current_state else 1
-
-    # 从单表取用户画像，供链路各节点按需取用。
-    try:
-        user_row = get_user_by_uid(uid)
-        user_dict = {
-            "uid": uid,
-            "username": (user_row or {}).get("username") or current_user.username or uid,
-        } if user_row else {"uid": uid, "username": current_user.username or uid}
-    except Exception as e:
-        logger.warning(f"[ChatStream] 取用户画像失败，退化为 token 层: {e}")
-        user_dict = {"uid": uid, "username": current_user.username or uid}
-
-    # 读取 LLM 提取的用户画像（由定时任务生成），注入 prompt 供个性化回答
-    try:
-        from sso_did.user_profile import get_user_profile
-        profile = get_user_profile(uid)
-        if profile:
-            user_dict["profile"] = profile
-    except Exception as e:
-        logger.warning(f"[ChatStream] 读取用户画像失败，跳过: {e}")
 
     initial_state: ChatState = _build_initial_state(session_id, message, turn_count, user=user_dict)
     
@@ -1379,7 +1396,7 @@ async def chat_stream(
                 persisted = True
                 try:
                     elapsed_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-                    logger.info(f"[Timing] 第{turn_count}轮 {ctx_['final_mode']} 模式耗时 {elapsed_ms}ms")
+                    logger.info(f"[Timing] 第{turn_count}轮 {ctx_['final_mode']} 模式耗时 {elapsed_ms}ms ")
                     clean_answer_for_pg, _ = _parse_related_questions(ctx_["full_answer"])
                     # 主模型取 token 最多的，其余模型作为 extra 分别写入
                     primary_model = token_acc.primary_model or ctx_.get("model_name", "")
@@ -1437,8 +1454,12 @@ async def chat_stream(
                             if node_name == "node_plan_retrieval":
                                 # 捕获检索规划匹配的标签（预计算失败时主图重新执行会走到这里）
                                 plan_output = output if isinstance(output, dict) else {}
-                                if plan_output.get("target_tags") is not None:
-                                    ctx["target_tags"] = plan_output["target_tags"]
+                                plan_tags = plan_output.get("target_tags")
+                                if plan_tags:
+                                    ctx["target_tags"] = plan_tags
+                                    logger.info(f"[Stream] on_chain_end node_plan_retrieval tags={plan_tags}")
+                                else:
+                                    logger.info(f"[Stream] on_chain_end node_plan_retrieval no tags (output keys={list(plan_output.keys())}, ctx_tags={ctx.get('target_tags')})")
 
                             if node_name == "node_generate":
                                 # node_generate 在工具链路中会被多次执行：pass1 返回带 tool_calls 的

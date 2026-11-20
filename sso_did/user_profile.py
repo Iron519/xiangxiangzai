@@ -2,7 +2,7 @@
 
 画像存储在 myagent_user.profile (JSONB) 列，结构：
 {
-  "basic_info": {"name": "...", "department": "...", "role": "...", "location": "..."},
+  "basic_info": {"name": "...", "region": "...", "age_group": "...", "life_stage": "..."},
   "personality": "...",
   "preferences": ["...", ...],
   "recent_topics": ["...", ...],
@@ -209,9 +209,9 @@ def _build_extraction_prompt(old_profile: dict | None, conversations: str) -> st
 {{
   "basic_info": {{
     "name": "用户提到的姓名或昵称，如无则为空字符串",
-    "department": "部门，如无则为空字符串",
-    "role": "职位或角色，如无则为空字符串",
-    "location": "所在地，如无则为空字符串"
+    "region": "所在地区或城市，如无则为空字符串",
+    "age_group": "年龄段，如青年/中年，如无法判断则为空字符串",
+    "life_stage": "人生阶段，如单身/新婚/备孕/育儿等，如无法判断则为空字符串"
   }},
   "personality": "性格特征描述，如沟通风格、专业程度、关注点倾向",
   "preferences": ["偏好1", "偏好2", "偏好3"],
