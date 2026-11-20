@@ -60,6 +60,8 @@ DDL_STATEMENTS = [
         approved        boolean      NOT NULL DEFAULT false,
         remark          text         NOT NULL DEFAULT '',
         deleted         boolean      NOT NULL DEFAULT false,
+        profile         jsonb        DEFAULT NULL,
+        profile_updated_at timestamptz DEFAULT NULL,
         create_time     timestamp    NOT NULL DEFAULT now(),
         update_time     timestamp    NOT NULL DEFAULT now()
     )
@@ -125,7 +127,6 @@ DDL_STATEMENTS = [
         role          TEXT NOT NULL,
         content       TEXT NOT NULL DEFAULT '',
         tags          TEXT DEFAULT NULL,
-        emotion       TEXT DEFAULT NULL,
         sources       JSONB DEFAULT NULL,
         mode          TEXT DEFAULT NULL,
         model_name    TEXT DEFAULT NULL,

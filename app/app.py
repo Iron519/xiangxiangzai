@@ -24,6 +24,7 @@ from calculate_logic.chunk_pipeline.routes import router as chunk_router
 from calculate_logic.chunk_pipeline.routes import recover_queued_tasks
 from sso_did.auth_service import auth_router, users_router
 from sso_did.auth import get_current_user, TokenData
+from sso_did.user_profile import router as profile_router, start_profile_loop, stop_profile_loop, close_profile_pool
 from calculate_logic.fetch_knowledge.faq_mgmt import router as faq_router
 from calculate_logic.rag.scene_template_mgmt import router as scene_template_router
 
@@ -64,6 +65,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(faq_router)
 app.include_router(scene_template_router)
+app.include_router(profile_router)
 
 
 # ================= DID 业务异常处理 =================
@@ -111,6 +113,15 @@ async def _warmup_on_startup():
         logger.error(f"[Startup] 异步预热失败: {e}")
 
 
+@app.on_event("startup")
+async def _start_profile_loop_on_startup():
+    """启动用户画像定时更新后台循环。"""
+    try:
+        start_profile_loop()
+    except Exception as e:
+        logger.warning(f"[Startup] 启动画像更新循环失败: {e}")
+
+
 @app.on_event("shutdown")
 async def _close_connections_on_shutdown():
     """关闭所有连接池/客户端，避免 worker 退出时连接泄漏。"""
@@ -127,6 +138,11 @@ async def _close_connections_on_shutdown():
         close_report_pool()
     except Exception as e:
         logger.warning(f"[Shutdown] 关闭报表PG连接池失败: {e}")
+    try:
+        stop_profile_loop()
+        close_profile_pool()
+    except Exception as e:
+        logger.warning(f"[Shutdown] 关闭用户画像连接池失败: {e}")
 
 
 # ================= MyAgent 应用API =================

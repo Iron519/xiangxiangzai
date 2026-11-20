@@ -1340,8 +1340,219 @@ LLM API (BASE_URL)
 Embedding 和 Rerank 客户端连接不同 API 端点，各自独立池是合理的。
 
 
+---
 
+## §15 标签分布 Decimal 序列化问题与修复
 
+### 问题现象
 
+前端数据监控页面报错：`加载失败：Object of type Decimal is not JSON serializable`，标签分布看板无内容。
 
+### 根因分析
 
+PostgreSQL 聚合函数的返回类型规则：
+
+| SQL 聚合函数 | 输入类型 | 返回类型 | psycopg3 Python 映射 |
+|---|---|---|---|
+| `COUNT(*)` | — | `bigint` | `int` |
+| `SUM(bigint)` | `bigint` | `numeric` | **`Decimal`** |
+| `AVG(int)` | `int` | `numeric` | **`Decimal`** |
+| `ROUND(numeric, n)` | `numeric` | `numeric` | **`Decimal`** |
+
+`get_tag_distribution` 改为 `UNION ALL` 子查询后，内层 `COUNT(*) AS cnt` 返回 `bigint`（→ Python `int`），外层 `SUM(cnt)` 对 `bigint` 求和，PostgreSQL 返回 `numeric` 类型，psycopg3 将其映射为 Python `Decimal`。
+
+FastAPI 的 `JSONResponse` 默认使用 `json.dumps`，而 `json.dumps` 不支持 `Decimal` 类型序列化，导致整个 `/stats/overview` 接口 500 报错。
+
+> **关键**：此错误发生在 FastAPI 响应序列化层（`JSONResponse.render()`），而非 endpoint 函数内部，因此 endpoint 的 `try/except` 无法捕获。
+
+### 影响范围审计
+
+对 `chat_report.py` 所有查询函数逐一检查 SUM/AVG 使用情况：
+
+| 函数 | 聚合表达式 | 返回类型 | Python 转换 | 状态 |
+|---|---|---|---|---|
+| `get_total_stats` | `COALESCE(SUM(total_token), 0)` | `numeric` | `int(row[6] or 0)` | ✅ 安全 |
+| `get_total_stats` | `AVG(duration_ms)` | `numeric` | `float(round(row[5], 1))` | ✅ 安全 |
+| `get_mode_stats` | 仅 `COUNT(*)` | `bigint` | 无需转换 | ✅ 安全 |
+| `get_daily_stats` | `COALESCE(SUM(total_token), 0)` | `numeric` | `int(row[4] or 0)` | ✅ 安全 |
+| `get_daily_stats` | `ROUND(AVG(duration_ms), 1)` | `numeric` | `float(round(row[3], 1))` | ✅ 安全 |
+| `get_trending_sessions` | 仅 `COUNT(*)`/`MAX` | `bigint` | 无需转换 | ✅ 安全 |
+| `get_emotion_distribution` | 仅 `COUNT(*)` | `bigint` | 无需转换 | ✅ 安全 |
+| **`get_tag_distribution`** | **`SUM(cnt)`** | **`numeric`** | **无** | **❌ BUG** |
+| `get_negative_trend` | `COUNT(*) FILTER` | `bigint` | `int(row[1] or 0)` | ✅ 安全 |
+| `get_model_token_breakdown` | `COALESCE(SUM(total_token), 0)` | `numeric` | `int(row[1])` | ✅ 安全 |
+| `get_negative_feedback_stats` | 仅 `COUNT(*)` | `bigint` | 无需转换 | ✅ 安全 |
+| `get_hourly_distribution` | 仅 `COUNT(*)` | `bigint` | 无需转换 | ✅ 安全 |
+| `get_duration_trend` | `ROUND(AVG(duration_ms), 1)` | `numeric` | `float(row[1])` | ✅ 安全 |
+
+**唯一问题点**：`get_tag_distribution` 第 346 行 `return [{"name": row[0], "value": row[1]} ...]`，`row[1]` 为 `Decimal` 未转换。
+
+### 修复
+
+```python
+# 修复前
+return [{"name": row[0], "value": row[1]} for row in rows]
+
+# 修复后
+return [{"name": row[0], "value": int(row[1])} for row in rows]
+```
+
+### 防御性建议
+
+1. **SQL 层面**：涉及 `SUM` 的查询统一加 `::bigint` 转换，如 `SUM(cnt)::bigint AS total`，从源头避免 `numeric` 类型
+2. **Python 层面**：所有从 psycopg 取出的聚合结果，显式用 `int()` 或 `float()` 包装，不依赖隐式类型推断
+3. **全局兜底**（可选）：为 FastAPI 注册自定义 JSON 序列化器，将 `Decimal` 自动转为 `int`/`float`：
+   ```python
+   from decimal import Decimal
+   from fastapi.responses import JSONResponse
+   import json
+
+   class DecimalJSONResponse(JSONResponse):
+       def render(self, content) -> bytes:
+           return json.dumps(content, ensure_ascii=False, default=lambda o: int(o) if isinstance(o, Decimal) else str(o)).encode()
+   ```
+   但此方案会掩盖类型问题，建议仅作为最后一道防线。
+
+### 历史背景
+
+旧版 `get_tag_distribution` 直接使用 `COUNT(*) AS count`（返回 `bigint` → `int`），不存在 Decimal 问题。改为 `UNION ALL` 统计空标签为"闲聊"后，外层引入 `SUM(cnt)` 才触发此问题——典型的"重构引入类型变更"陷阱。
+
+---
+
+## §16 用户画像系统
+
+### 设计目标
+
+从用户历史对话中自动提取画像（基础信息、性格、偏好、最近关注），定时更新，在生成回答时注入 LLM prompt 实现个性化回复。
+
+### 数据存储
+
+`myagent_user` 表新增 2 列：
+
+| 列名 | 类型 | 说明 |
+|---|---|---|
+| `profile` | `JSONB` | 完整画像 JSON |
+| `profile_updated_at` | `TIMESTAMPTZ` | 上次画像更新时间 |
+
+画像 JSON 结构：
+
+```json
+{
+  "basic_info": {
+    "name": "张三",
+    "department": "人力资源部",
+    "role": "专员",
+    "location": "北京"
+  },
+  "personality": "沟通简洁直接，关注实操细节",
+  "preferences": ["偏好中文回答", "喜欢步骤式指引"],
+  "recent_topics": ["年假余额", "考勤补卡流程"],
+  "communication_style": "提问简短，习惯追问细节"
+}
+```
+
+### 定时更新机制
+
+| 配置项 | 默认值 | 说明 |
+|---|---|---|
+| `USER_PROFILE_INTERVAL_HOURS` | `12` | 后台循环周期（小时） |
+
+- **后台 asyncio 任务**：app 启动时创建，每 `USER_PROFILE_INTERVAL_HOURS` 小时执行一次
+- **扫描逻辑**：只处理 `approved=true, deleted=false` 且有自 `profile_updated_at` 之后新对话的用户
+- **速率限制**：逐用户处理，每个用户间隔 1 秒
+- **最小门槛**：用户消息总数 ≥ 5 条才开始生成画像
+- **最大消息量**：每次提取最多喂 100 条用户消息，避免 token 溢出
+
+### 增量更新流程
+
+```
+首次生成：
+  拉取全部用户消息（最近 100 条）→ LLM 提取 → 写入 profile
+
+后续更新：
+  读取老画像 profile JSON
+  + 拉取 profile_updated_at 之后的新用户消息
+  → LLM 合并更新（保留有效旧信息 + 补充新信息）
+  → 写入新 profile + 更新 profile_updated_at
+```
+
+LLM 使用 `FAST_MODEL`（小模型），`temperature=0.1`，输出纯 JSON。
+
+### LLM 提取 Prompt 设计
+
+```
+你是一个用户画像分析助手。根据用户的历史对话记录，提取或更新用户画像。
+
+<existing_profile>{老画像 JSON 或"无"}</existing_profile>
+<recent_conversations>{对话列表}</recent_conversations>
+
+规则：
+1. 保留 existing_profile 中仍有效的信息
+2. recent_topics 只保留最近 5-10 个，过时移除
+3. 未提及的字段保留旧值
+4. 不记录手机号/身份证等 PII
+5. 返回纯 JSON
+```
+
+对话格式化为 `[MM-DD HH:mm] 用户消息内容`，仅取 `role='user'` 的消息（assistant 回复对画像提取价值不大）。
+
+### 生成回答时的引用
+
+`generate_answer.py` 的 `stream_response` 中，构建 `user_dict` 时读取 `profile`：
+
+```python
+from sso_did.user_profile import get_user_profile
+profile = get_user_profile(uid)
+if profile:
+    user_dict["profile"] = profile
+```
+
+`node_generate` 的 `<user_info>` 块扩展为：
+
+```
+<user_info>
+【用户信息】
+- 昵称: 张三
+- 当前时间: 2026-11-20 10:30:00
+- 用户语种: zh
+- 部门: 人力资源部
+- 职位: 专员
+- 性格特征: 沟通简洁直接，关注实操细节
+- 偏好: 偏好中文回答, 喜欢步骤式指引
+- 最近关注: 年假余额, 考勤补卡流程
+- 沟通风格: 提问简短，习惯追问细节
+</user_info>
+```
+
+`_render_profile()` 函数将 JSON 渲染为可读文本行，无画像时返回空字符串（不影响原有逻辑）。
+
+### API 接口
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| GET | `/api/v1/profile/{uid}` | 管理员或本人 | 查看用户画像 |
+| POST | `/api/v1/profile/{uid}/refresh` | 仅管理员 | 手动触发画像更新 |
+
+### 文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `sso_did/user_profile.py` | 完整实现：PG 连接池、LLM 提取、定时循环、API 路由 |
+| `calculate_logic/rag/generate_answer.py` | `_render_profile()` 函数、`stream_response` 读取 profile、`<user_info>` 展开画像 |
+| `app/app.py` | 导入 `profile_router` / `start_profile_loop` / `stop_profile_loop` / `close_profile_pool`；注册路由；startup 启动循环；shutdown 停止循环+关闭连接池 |
+| `table_data/create_all_tables.py` | `myagent_user` CREATE TABLE 加 `profile` + `profile_updated_at` 列 |
+| `.env` / `.env.example` | `USER_PROFILE_INTERVAL_HOURS=12` |
+
+### 防御性设计
+
+- **画像读取失败不阻断对话**：`stream_response` 中 `get_user_profile` 包裹 try/except，失败时 `user_dict` 不含 `profile`，`<user_info>` 退化为原有行为
+- **LLM 提取失败不覆盖老画像**：`_extract_profile` 返回 None 时跳过写入，保留旧画像
+- **JSON 解析容错**：LLM 输出可能包含 markdown 代码块标记（\`\`\`json），提取时自动剥离
+- **后台循环异常隔离**：单个用户更新失败不影响其他用户，循环本身异常不会崩溃
+
+### 存量数据库迁移 SQL
+
+```sql
+ALTER TABLE myagent_user ADD COLUMN IF NOT EXISTS profile jsonb DEFAULT NULL;
+ALTER TABLE myagent_user ADD COLUMN IF NOT EXISTS profile_updated_at timestamptz DEFAULT NULL;
+```

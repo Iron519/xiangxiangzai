@@ -193,8 +193,8 @@ SOURCE_FILES = [
 
 def _random_mode() -> str:
     return random.choices(
-        ["rag", "chat", "emotion"],
-        weights=[75, 22, 3],
+        ["rag", "chat"],
+        weights=[75, 25],
     )[0]
 
 
@@ -222,19 +222,10 @@ TAGS_POOL = [
     "办公规范", "闲聊", "情绪反馈", "其他",
 ]
 
-# 情绪标签池
-EMOTIONS_POOL = ["积极", "中性", "消极", "紧急"]
-
-
 def _random_tags() -> str:
     """随机返回 1~2 个主题标签。"""
     n = random.randint(1, 2)
     return "，".join(random.sample(TAGS_POOL, n))
-
-
-def _random_emotion() -> str:
-    """随机返回一个情绪标签。"""
-    return random.choice(EMOTIONS_POOL)
 
 
 def _random_content(role: str) -> str:
@@ -296,7 +287,7 @@ def generate(total_rows: int):
                         batch_data.append((
                             "anonymous", sid, t, "user",
                             _random_content("user"),
-                            _random_tags(), _random_emotion(),
+                            _random_tags(),
                             sources, mode, duration, ts,
                         ))
                         rows_inserted += 1
@@ -309,7 +300,7 @@ def generate(total_rows: int):
                         batch_data.append((
                             "anonymous", sid, t, "assistant",
                             _random_content("assistant"),
-                            None, None,
+                            None,
                             None, mode, ai_duration, ts_ai,
                         ))
                         rows_inserted += 1
@@ -326,8 +317,8 @@ def generate(total_rows: int):
                             f"""
                             INSERT INTO {CONV_TABLE}
                                 (uid, session_id, turn_count, role, content,
-                                 tags, emotion, sources, mode, duration_ms, created_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                 tags, sources, mode, duration_ms, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """,
                             row,
                         )

@@ -866,6 +866,31 @@ def _parse_related_questions(text: str, max_count: int = 3) -> tuple[str, list[s
             break
     return body.strip(), questions
 
+
+def _render_profile(profile: dict | None) -> str:
+    """将用户画像 JSON 渲染为 <user_info> 中可读的文本行，无画像时返回空字符串。"""
+    if not profile or not isinstance(profile, dict):
+        return ""
+    lines = []
+    bi = profile.get("basic_info") or {}
+    if isinstance(bi, dict):
+        for k, label in [("department", "部门"), ("role", "职位"), ("location", "所在地")]:
+            v = bi.get(k)
+            if v:
+                lines.append(f"- {label}: {v}")
+    if profile.get("personality"):
+        lines.append(f"- 性格特征: {profile['personality']}")
+    prefs = profile.get("preferences")
+    if isinstance(prefs, list) and prefs:
+        lines.append(f"- 偏好: {', '.join(str(p) for p in prefs[:5])}")
+    topics = profile.get("recent_topics")
+    if isinstance(topics, list) and topics:
+        lines.append(f"- 最近关注: {', '.join(str(t) for t in topics[:10])}")
+    if profile.get("communication_style"):
+        lines.append(f"- 沟通风格: {profile['communication_style']}")
+    return "\n".join(lines)
+
+
 # ================= RAG节点 —— 生成最终回答 =================
 async def node_generate(state: ChatState):
     retrieved_context = state.get("context", "")
@@ -933,6 +958,7 @@ async def node_generate(state: ChatState):
     - 昵称: {user.get("username")}
     - 当前时间: {current_time}
     - 用户语种: {language}
+    {_render_profile(user.get("profile"))}
     </user_info>
 
     <tool_usage_rules>
@@ -1305,6 +1331,15 @@ async def chat_stream(
     except Exception as e:
         logger.warning(f"[ChatStream] 取用户画像失败，退化为 token 层: {e}")
         user_dict = {"uid": uid, "username": current_user.username or uid}
+
+    # 读取 LLM 提取的用户画像（由定时任务生成），注入 prompt 供个性化回答
+    try:
+        from sso_did.user_profile import get_user_profile
+        profile = get_user_profile(uid)
+        if profile:
+            user_dict["profile"] = profile
+    except Exception as e:
+        logger.warning(f"[ChatStream] 读取用户画像失败，跳过: {e}")
 
     initial_state: ChatState = _build_initial_state(session_id, message, turn_count, user=user_dict)
     
@@ -1849,7 +1884,7 @@ async def get_session_messages(session_id: str, current_user: TokenData = Depend
             cur = conn.execute(
                 f"SELECT role, content, turn_count, sources, related_questions, user_judgement, judgement_detail "
                 f"FROM {CONV_TABLE} "
-                f"WHERE uid = %s AND session_id = %s ORDER BY id ASC",
+                f"WHERE uid = %s AND session_id = %s AND content <> '' ORDER BY id ASC",
                 (uid, session_id),
             )
             rows = cur.fetchall()

@@ -233,7 +233,8 @@ def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str
                     SELECT
                         DATE(created_at)                                                AS day,
                         COUNT(*)                                                        AS message_count,
-                        COUNT(*) FILTER (WHERE role = 'user')                           AS user_count,
+                        COUNT(DISTINCT uid) FILTER (WHERE role = 'user')               AS unique_users,
+                        COUNT(*) FILTER (WHERE role = 'user')                           AS user_messages,
                         ROUND(AVG(duration_ms) FILTER (WHERE duration_ms IS NOT NULL), 1) AS avg_duration_ms,
                         COALESCE(SUM(total_token), 0)                                   AS total_tokens
                     FROM {CONV_TABLE}
@@ -248,8 +249,9 @@ def get_daily_stats(days: int = 14, start_date: str | None = None, end_date: str
                 "date": row[0].isoformat() if row[0] else "",
                 "message_count": row[1],
                 "user_count": row[2],
-                "avg_duration_ms": float(round(row[3], 1)) if row[3] else 0,
-                "total_tokens": int(row[4] or 0),
+                "user_messages": row[3],
+                "avg_duration_ms": float(round(row[4], 1)) if row[4] else 0,
+                "total_tokens": int(row[5] or 0),
             }
             for row in rows
         ]
@@ -294,30 +296,6 @@ def get_trending_sessions(limit: int = 5, start_date: str | None = None, end_dat
         return []
 
 
-def get_emotion_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
-    """情绪分布（用于扇形图）。仅统计已打标的数据，排除 emotion 为空的记录。"""
-    try:
-        conds, range_params = _range_conds(start_date, end_date, uid)
-        conds.append("role = 'user'")
-        conds.append("emotion IS NOT NULL AND emotion != ''")
-        with _get_pool().connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        emotion,
-                        COUNT(*)                   AS count
-                    FROM {CONV_TABLE}
-                    WHERE {' AND '.join(conds)}
-                    GROUP BY emotion
-                    ORDER BY count DESC
-                """, range_params)
-                rows = cur.fetchall()
-        return [{"name": row[0], "value": row[1]} for row in rows]
-    except Exception as e:
-        logger.error(f"[GetEmotionDistribution] 查询失败: {e}")
-        return []
-
-
 def get_tag_distribution(start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
     """主题标签分布（用于条形图）。多标签按英文逗号拆开分别计数；空标签归为"闲聊"。"""
     try:
@@ -341,49 +319,11 @@ def get_tag_distribution(start_date: str | None = None, end_date: str | None = N
                     ) t
                     GROUP BY tag_name
                     ORDER BY total DESC
-                """, range_params)
+                """, range_params + range_params)
                 rows = cur.fetchall()
-        return [{"name": row[0], "value": row[1]} for row in rows]
+        return [{"name": row[0], "value": int(row[1])} for row in rows]
     except Exception as e:
         logger.error(f"[GetTagDistribution] 查询失败: {e}")
-        return []
-
-
-def get_negative_trend(days: int = 14, start_date: str | None = None, end_date: str | None = None, uid: str = "") -> list[dict]:
-    """按天统计消极/紧急情绪数量趋势（用于 Negative Trend 折线图）。"""
-    try:
-        base_sql, base_params = _range_clause(start_date, end_date, uid)
-        if not base_sql:
-            base_sql = f" WHERE created_at >= NOW() - INTERVAL '{days} days'"
-            base_params = []
-            if uid:
-                base_sql += " AND uid = %s"
-                base_params.append(uid)
-        with _get_pool().connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"""
-                    SELECT
-                        DATE(created_at)                                              AS day,
-                        COUNT(*) FILTER (WHERE role = 'user' AND emotion = '消极')    AS negative_count,
-                        COUNT(*) FILTER (WHERE role = 'user' AND emotion = '紧急')    AS urgent_count,
-                        COUNT(*) FILTER (WHERE role = 'user' AND emotion IN ('消极', '紧急')) AS total_negative
-                    FROM {CONV_TABLE}
-                    {base_sql}
-                    GROUP BY DATE(created_at)
-                    ORDER BY day ASC
-                """, base_params)
-                rows = cur.fetchall()
-        return [
-            {
-                "date": row[0].isoformat() if row[0] else "",
-                "negative_count": int(row[1] or 0),
-                "urgent_count": int(row[2] or 0),
-                "total_negative": int(row[3] or 0),
-            }
-            for row in rows
-        ]
-    except Exception as e:
-        logger.error(f"[GetNegativeTrend] 查询失败: {e}")
         return []
 
 
@@ -542,11 +482,9 @@ async def stats_overview(start_date: str | None = Query(default=None),
         mode_stats = get_mode_stats(start_date=start_date, end_date=end_date, uid=uid)
         daily_stats = get_daily_stats(days=14, start_date=start_date, end_date=end_date, uid=uid)
         trending = get_trending_sessions(limit=5, start_date=start_date, end_date=end_date, uid=uid)
-        emotion_dist = get_emotion_distribution(start_date=start_date, end_date=end_date, uid=uid)
         tag_dist = get_tag_distribution(start_date=start_date, end_date=end_date, uid=uid)
         hourly_dist = get_hourly_distribution(start_date=start_date, end_date=end_date, uid=uid)
         duration_trend = get_duration_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
-        negative_trend = get_negative_trend(days=14, start_date=start_date, end_date=end_date, uid=uid)
         model_token_breakdown = get_model_token_breakdown(start_date=start_date, end_date=end_date, uid=uid)
         negative_feedback = get_negative_feedback_stats(start_date=start_date, end_date=end_date, uid=uid)
 
@@ -556,11 +494,9 @@ async def stats_overview(start_date: str | None = Query(default=None),
             "mode_stats": mode_stats,
             "daily_stats": daily_stats,
             "trending_sessions": trending,
-            "emotion_distribution": emotion_dist,
             "tag_distribution": tag_dist,
             "hourly_distribution": hourly_dist,
             "duration_trend": duration_trend,
-            "negative_trend": negative_trend,
             "model_token_breakdown": model_token_breakdown,
             "negative_feedback": negative_feedback,
         })

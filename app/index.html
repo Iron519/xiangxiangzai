@@ -688,7 +688,7 @@
     .chunk-related-content.visible { display: block; }
 
     /* ════════════ STATS DASHBOARD (Figma Design v2) ════════════ */
-    .dm-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; }
+    .dm-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; width: 100%; box-sizing: border-box; }
     .dm-header {
       display: flex; justify-content: space-between; align-items: center;
       margin-bottom: 32px;
@@ -769,64 +769,6 @@
     }
     .dm-trend-tab.active { background: var(--c-card); color: var(--c-text); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
     .dm-trend-chart { width: 100%; height: 320px; position: relative; }
-
-    /* ── Bottom Two-Card Grid ── */
-    .dm-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .dm-bottom-card { display: flex; flex-direction: column; min-height: 420px; }
-
-    /* ── Token Breakdown ── */
-    /* ── Tag Distribution (标签分布) ── */
-    .dm-tag-segment-bar {
-      display: flex; height: 12px; border-radius: var(--r-full); overflow: hidden;
-      background: var(--c-secondary); margin-bottom: 20px; flex-shrink: 0;
-    }
-    .dm-tag-segment { height: 100%; transition: width 0.4s var(--ease); }
-    .dm-tag-ranking {
-      display: flex; flex-direction: column; gap: 16px; flex: 1;
-      overflow-y: auto; min-height: 0; padding-right: 4px;
-    }
-    .dm-tag-ranking::-webkit-scrollbar { width: 4px; }
-    .dm-tag-ranking::-webkit-scrollbar-track { background: transparent; }
-    .dm-tag-ranking::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: var(--r-full); }
-    .dm-tag-rank-item {
-      display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 12px;
-      flex-shrink: 0;
-    }
-    .dm-tag-rank-num {
-      width: 28px; height: 28px; border-radius: var(--r-md); background: var(--c-secondary);
-      display: flex; align-items: center; justify-content: center;
-      font-family: var(--ff-mono); font-size: 10px; font-weight: var(--fw-s); color: var(--c-text-3);
-    }
-    .dm-tag-rank-info { min-width: 0; }
-    .dm-tag-rank-name-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-    .dm-tag-rank-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .dm-tag-rank-name { font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .dm-tag-rank-bar-wrap { height: 6px; border-radius: var(--r-full); background: var(--c-secondary); overflow: hidden; }
-    .dm-tag-rank-bar { height: 100%; border-radius: var(--r-full); transition: width 0.4s var(--ease); }
-    .dm-tag-rank-values { text-align: right; white-space: nowrap; }
-    .dm-tag-rank-value { font-family: var(--ff-mono); font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); margin: 0; }
-    .dm-tag-rank-percent { font-family: var(--ff-mono); font-size: 10px; color: var(--c-text-3); margin: 0; }
-
-    /* ── Negative Feedback Stats ── */
-    .dm-neg-stats-row {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-      border-radius: var(--r-md); background: var(--c-secondary); padding: 16px 0;
-      margin: 20px 0; border: 1px solid var(--c-border);
-    }
-    .dm-neg-stat-item { padding: 0 20px; }
-    .dm-neg-stat-item + .dm-neg-stat-item { border-left: 1px solid var(--c-border); }
-    .dm-neg-stat-label { font-size: 11px; color: var(--c-text-3); margin: 0; }
-    .dm-neg-stat-value-row { display: flex; align-items: baseline; gap: 4px; margin-top: 4px; }
-    .dm-neg-stat-value { font-family: var(--ff-mono); font-size: 24px; font-weight: var(--fw-s); color: var(--c-text); }
-    .dm-neg-stat-unit { font-size: 12px; color: var(--c-text-3); }
-    .dm-neg-reasons { display: flex; flex-direction: column; gap: 16px; flex: 1; justify-content: space-evenly; }
-    .dm-neg-reason-item { }
-    .dm-neg-reason-header { display: flex; align-items: center; margin-bottom: 8px; }
-    .dm-neg-reason-name { font-size: 12px; font-weight: var(--fw-m); color: var(--c-text); }
-    .dm-neg-reason-count { font-family: var(--ff-mono); font-size: 11px; color: var(--c-text-3); margin-left: auto; }
-    .dm-neg-reason-percent { font-family: var(--ff-mono); font-size: 10px; color: var(--c-text-3); width: 32px; text-align: right; margin-left: 12px; }
-    .dm-neg-reason-bar-wrap { height: 6px; border-radius: var(--r-full); background: var(--c-secondary); overflow: hidden; }
-    .dm-neg-reason-bar { height: 100%; border-radius: var(--r-full); background: var(--c-text-2); transition: width 0.4s var(--ease); }
 
     /* ── Loading ── */
     .dm-loading { text-align: center; padding: 80px 20px; color: var(--c-text-3); font-size: 14px; }
@@ -1055,10 +997,19 @@
       .date-range-bar { flex-wrap: wrap; }
       .sidebar-logo-icon { width: 28px; height: 28px; }
       .sidebar-logo-text { font-size: 15px; }
+      .dm-kpi-grid { grid-template-columns: repeat(2, 1fr); }
     }
     @media (max-width: 768px) {
       .kpi-grid { grid-template-columns: repeat(2, 1fr); }
       .sidebar-wrapper { display: none; }
+      .dm-kpi-grid { grid-template-columns: 1fr; }
+      .dm-page, .kb-page { padding: 20px 16px; }
+      .dm-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .dm-header-right { flex-wrap: wrap; }
+      .kb-page-header { flex-direction: column; align-items: flex-start; gap: 12px; }
+      .kb-page-header-actions { width: 100%; flex-wrap: wrap; }
+      .kb-search-box { flex: 1; min-width: 0; }
+      .kb-search-box input { width: 100%; }
     }
 
     /* ── Header User Box ── */
@@ -1087,7 +1038,7 @@
     }
 
     /* ════════════ KNOWLEDGE BASE PAGE (Figma Design) ════════════ */
-    .kb-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; }
+    .kb-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 
     .kb-page-header {
       display: flex; justify-content: space-between; align-items: center;
@@ -1639,19 +1590,6 @@
                     </div>
                   </div>
                   <div class="dm-trend-chart"><canvas id="chartTrend"></canvas></div>
-                </div>
-
-                <div class="dm-bottom-grid">
-                  <div class="dm-card dm-bottom-card">
-                    <h2 class="dm-card-title">标签分布</h2>
-                    <p class="dm-card-subtitle">按知识库标签统计本周期提问分布</p>
-                    <div id="dmTagDistribution" style="flex:1;display:flex;flex-direction:column;margin-top:16px"></div>
-                  </div>
-                  <div class="dm-card dm-bottom-card">
-                    <h2 class="dm-card-title">负反馈统计</h2>
-                    <p class="dm-card-subtitle">用户点踩及原因分布</p>
-                    <div id="dmNegativeFeedback" style="flex:1;display:flex;flex-direction:column"></div>
-                  </div>
                 </div>
 
               </div>
@@ -4296,105 +4234,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       }
     });
   }
-  function renderTagDistribution(data) {
-    const container = document.getElementById('dmTagDistribution');
-    if (!container) return;
-    let dist = data.tag_distribution || [];
-    const total = dist.reduce((a, b) => a + (b.value || 0), 0);
-
-    if (!dist.length || total === 0) {
-      container.innerHTML = '<div style="text-align:center;color:var(--c-text-3);padding:60px 0;font-size:13px">暂无标签数据</div>';
-      return;
-    }
-
-    const TOP_N = 10;
-    let items = dist.slice(0, TOP_N);
-    const otherSum = dist.slice(TOP_N).reduce((a, b) => a + (b.value || 0), 0);
-    if (otherSum > 0) {
-      items.push({ name: '其他', value: otherSum });
-    }
-
-    let html = `<div class="dm-tag-segment-bar">`;
-    items.forEach((item, i) => {
-      const pct = (item.value / total * 100);
-      const color = item.name === '其他' ? DM_COLOR_OTHER : DM_COLORS[i % DM_COLORS.length];
-      html += `<div class="dm-tag-segment" style="width:${pct}%;background:${color}" title="${item.name}: ${item.value} (${pct.toFixed(1)}%)"></div>`;
-    });
-    html += `</div><div class="dm-tag-ranking">`;
-
-    items.forEach((item, i) => {
-      const pct = (item.value / total * 100);
-      const color = item.name === '其他' ? DM_COLOR_OTHER : DM_COLORS[i % DM_COLORS.length];
-      html += `
-        <div class="dm-tag-rank-item">
-          <span class="dm-tag-rank-num">${String(i + 1).padStart(2, '0')}</span>
-          <div class="dm-tag-rank-info">
-            <div class="dm-tag-rank-name-row">
-              <span class="dm-tag-rank-dot" style="background:${color}"></span>
-              <span class="dm-tag-rank-name">${item.name}</span>
-            </div>
-            <div class="dm-tag-rank-bar-wrap">
-              <div class="dm-tag-rank-bar" style="width:${pct}%;background:${color}"></div>
-            </div>
-          </div>
-          <div class="dm-tag-rank-values">
-            <p class="dm-tag-rank-value">${item.value.toLocaleString()}</p>
-            <p class="dm-tag-rank-percent">${pct.toFixed(0)}%</p>
-          </div>
-        </div>
-      `;
-    });
-    html += `</div>`;
-    container.innerHTML = html;
-  }
-
-  function renderNegativeFeedback(data) {
-    const container = document.getElementById('dmNegativeFeedback');
-    if (!container) return;
-    const fb = data.negative_feedback || {};
-
-    let html = `
-      <div class="dm-neg-stats-row">
-        <div class="dm-neg-stat-item">
-          <p class="dm-neg-stat-label">点踩总数</p>
-          <div class="dm-neg-stat-value-row">
-            <span class="dm-neg-stat-value">${(fb.dislike_count || 0).toLocaleString()}</span>
-            <span class="dm-neg-stat-unit">次</span>
-          </div>
-        </div>
-        <div class="dm-neg-stat-item">
-          <p class="dm-neg-stat-label">占全部对话</p>
-          <div class="dm-neg-stat-value-row">
-            <span class="dm-neg-stat-value">${(fb.dislike_percent || 0).toFixed(2)}</span>
-            <span class="dm-neg-stat-unit">%</span>
-          </div>
-        </div>
-      </div>
-      <div class="dm-neg-reasons">
-    `;
-
-    const reasons = fb.reasons || [];
-    if (reasons.length === 0) {
-      html += '<div style="text-align:center;color:var(--c-text-3);padding:40px 0;font-size:13px">暂无负反馈数据</div>';
-    } else {
-      reasons.forEach(r => {
-        html += `
-          <div class="dm-neg-reason-item">
-            <div class="dm-neg-reason-header">
-              <span class="dm-neg-reason-name">${r.reason}</span>
-              <span class="dm-neg-reason-count">${(r.count || 0).toLocaleString('en-US')} 次</span>
-              <span class="dm-neg-reason-percent">${r.percent}%</span>
-            </div>
-            <div class="dm-neg-reason-bar-wrap">
-              <div class="dm-neg-reason-bar" style="width:${r.percent}%"></div>
-            </div>
-          </div>
-        `;
-      });
-    }
-    html += `</div>`;
-    container.innerHTML = html;
-  }
 
   async function loadStats() {
     const loading = document.getElementById('statsLoading');
@@ -4412,8 +4251,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
 
       renderKPI(data);
       renderTrendChart(data);
-      renderTagDistribution(data);
-      renderNegativeFeedback(data);
 
       const lastUpdatedEl = document.getElementById('statsLastUpdated');
       if (lastUpdatedEl) lastUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
@@ -4442,8 +4279,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     if (!_statsData) return;
     const t = _statsData.total_stats || {};
     const daily = _statsData.daily_stats || [];
-    const tagDist = _statsData.tag_distribution || [];
-    const neg = _statsData.negative_feedback || {};
     const roleLabel = _currentRole === 'admin' ? '管理员' : '用户';
 
     const escapeCSV = (v) => {
@@ -4475,26 +4310,6 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       rows.push([d.date, d.user_count || 0, d.message_count || 0, d.total_tokens || 0, d.avg_duration_ms || 0]);
     });
     rows.push([]);
-
-    rows.push(['三、标签分布']);
-    rows.push(['标签', '条数']);
-    tagDist.forEach(item => {
-      rows.push([item.name, item.value]);
-    });
-    rows.push([]);
-
-    rows.push(['四、负反馈统计']);
-    rows.push(['指标', '值']);
-    rows.push(['点踩总数', neg.dislike_count || 0]);
-    rows.push(['助手回复总数', neg.total_assistant || 0]);
-    rows.push(['点踩占比(%)', neg.dislike_percent || 0]);
-    if (neg.reasons && neg.reasons.length) {
-      rows.push([]);
-      rows.push(['点踩原因', '次数', '占比(%)']);
-      neg.reasons.forEach(r => {
-        rows.push([r.reason, r.count, r.percent]);
-      });
-    }
 
     const csv = '\ufeff' + rows.map(r => r.map(escapeCSV).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
