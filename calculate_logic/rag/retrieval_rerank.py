@@ -470,14 +470,14 @@ class PgHybridRetriever:
                FALSE::boolean AS is_qa, c.metadata, c.group_id, c.internal_id,
                c.parent_content, NULL::text AS related_content_summary,
                c.related_image_url,
-               ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s)) AS similarity,
+               ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s), 8) AS similarity,
                c.upload_time, c.update_time, c.expire_time, c.if_show
         FROM {self.table_name} c
         WHERE c.content_tsv @@ to_tsquery('simple', %(tsquery)s)
           AND (c.expire_time IS NULL OR c.expire_time > %(query_time)s)
           {uid_filter}
           {tag_filter}
-        ORDER BY ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s)) DESC
+        ORDER BY ts_rank(c.content_tsv, to_tsquery('simple', %(tsquery)s), 8) DESC
         LIMIT %(candidate_top_k)s
         """
         params = {

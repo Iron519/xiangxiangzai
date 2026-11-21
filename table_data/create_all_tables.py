@@ -17,14 +17,6 @@ TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
 FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq")
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
-# 旧表（已废弃的 _mgmt 后缀表）
-OLD_TABLES = [
-    "myagent_user_mgmt",
-    "myagent_kb_chunks_mgmt",
-    "myagent_conversations_history_mgmt",
-    "myagent_upload_tasks_mgmt",
-    "myagent_faq_mgmt",
-]
 # 当前所有表，重建时先 DROP
 ALL_TABLES = [USER_TABLE, KB_TABLE, CONV_TABLE, SESSION_TABLE, TASK_TABLE, FAQ_TABLE, SCENE_TABLE]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
@@ -41,9 +33,6 @@ def _conn():
 
 
 DDL_STATEMENTS = [
-    # ─── 删除旧的 _mgmt 后缀表 ───
-    *[f"DROP TABLE IF EXISTS {t} CASCADE" for t in OLD_TABLES],
-
     # ─── 删除当前所有表（重建）───
     *[f"DROP TABLE IF EXISTS {t} CASCADE" for t in ALL_TABLES],
 

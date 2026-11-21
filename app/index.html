@@ -236,37 +236,93 @@
     /* ── Sidebar: Chat history (figma_files: flex min-h-0 flex-1 flex-col) ── */
     .sidebar-chat-section {
       flex: 1; min-height: 0; display: flex; flex-direction: column;
+      position: relative;
     }
     .sidebar-chat-header {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 0 20px 8px;
+      padding: 10px 24px; position: relative; z-index: 10;
     }
     .sidebar-chat-label {
-      font-size: 11px; font-weight: var(--fw-s); text-transform: uppercase; letter-spacing: 0.05em;
-      color: var(--c-text-3);
+      display: flex; align-items: center; gap: 12px;
+      font-size: 14px; font-weight: var(--fw-m); color: var(--c-text-3);
+      font-family: var(--ff); transition: opacity 0.2s ease;
+    }
+    .sidebar-chat-label svg {
+      width: 16px; height: 16px; flex-shrink: 0;
     }
     .sidebar-chat-search-btn {
       border: none; background: transparent; cursor: pointer;
       color: var(--c-text-3); padding: 2px; display: flex; align-items: center; justify-content: center;
-      transition: color 0.15s ease;
+      transition: color 0.15s ease, opacity 0.2s ease;
+      flex-shrink: 0;
     }
     .sidebar-chat-search-btn:hover { color: var(--c-text); }
-    .sidebar-chat-list {
-      flex: 1; overflow-y: auto; padding: 0 12px;
+
+    /* ── 搜索框：以搜索按钮为原点，从右向左展开 ── */
+    .sidebar-chat-search-box {
+      position: absolute; right: 12px; top: 50%;
+      transform: translateY(-50%);
+      height: 40px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 0 14px;
+      background: var(--c-secondary);
+      border: 1px solid var(--c-border);
+      border-radius: 12px;
+      width: 18px; opacity: 0; overflow: hidden;
+      pointer-events: none;
+      transition: width 0.28s var(--ease-out), opacity 0.2s ease;
     }
+    .sidebar-chat-search-box.open {
+      width: calc(100% - 24px);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .sidebar-chat-search-box > svg {
+      flex-shrink: 0; color: var(--c-text-3);
+    }
+    .sidebar-chat-search-box input {
+      flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+      font-size: 13px; color: var(--c-text); font-family: var(--ff);
+    }
+    .sidebar-chat-search-box input::placeholder { color: var(--c-text-3); }
+    .sidebar-chat-search-box .search-close-btn {
+      border: none; background: transparent; cursor: pointer; padding: 2px;
+      color: var(--c-text-3); display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; border-radius: var(--r-full);
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+    .sidebar-chat-search-box .search-close-btn:hover {
+      color: var(--c-text); background: var(--c-gray-2);
+    }
+
+    /* 搜索展开时隐藏标签和按钮 */
+    .sidebar-chat-header.searching .sidebar-chat-label { opacity: 0; }
+    .sidebar-chat-header.searching .sidebar-chat-search-btn { opacity: 0; pointer-events: none; }
+
+    .sidebar-chat-list {
+      flex: 1; overflow-y: auto; padding: 0 12px; margin-top: 8px;
+    }
+    .sidebar-chat-item.hidden-by-search { display: none; }
+    .sidebar-chat-search-empty {
+      display: none; position: absolute; left: 0; right: 0;
+      top: 50%; transform: translateY(-50%);
+      text-align: center; font-size: 13px; color: var(--c-text-3);
+      pointer-events: none;
+    }
+    .sidebar-chat-search-empty.visible { display: block; }
     .sidebar-chat-item {
       margin-bottom: 4px; padding: 10px 12px; border-radius: 12px;
-      font-size: 13px; color: var(--c-text); font-weight: var(--fw-m);
+      font-size: 14px; color: var(--c-text); font-weight: var(--fw-m); font-family: var(--ff);
       cursor: pointer; display: block; width: 100%; text-align: left;
-      transition: all 0.15s ease; border: none; background: transparent; font-family: var(--ff);
+      transition: all 0.15s ease; border: none; background: transparent;
     }
     .sidebar-chat-item:hover { background: var(--c-sidebar-hover); }
     .sidebar-chat-item.active {
-      background: rgba(var(--c-brand-rgb), 0.08);
+      background: var(--c-sidebar-active);
     }
     .sidebar-chat-item.active .chat-item-title { color: var(--c-brand); font-weight: var(--fw-s); }
     .sidebar-chat-item .chat-item-row {
-      display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; gap: 12px;
     }
     .sidebar-chat-item .chat-item-title {
       flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -277,7 +333,7 @@
     }
     .sidebar-chat-item:hover .chat-item-more { opacity: 1; }
     .sidebar-chat-item .chat-item-time {
-      display: block; margin-top: 4px; font-size: 10px; color: var(--c-text-3);
+      display: block; margin-top: 2px; font-size: 12px; color: var(--c-text-3);
     }
 
     /* ── Sidebar: User card (figma_files: m-3 rounded-2xl border bg-background/70 p-3) ── */
@@ -644,8 +700,10 @@
       cursor: pointer; font-family: var(--ff); transition: all var(--dur);
       display: inline-flex; align-items: center; gap: 5px;
     }
-    .small-btn.btn-delete { border-color: transparent; background: transparent; color: var(--c-text-2); }
-    .small-btn.btn-delete:hover { background: rgba(var(--c-rose-rgb),0.1); color: var(--c-rose); border-color: transparent; }
+    .small-btn.btn-delete { border-color: rgba(var(--c-rose-rgb),0.3); background: rgba(var(--c-rose-rgb),0.08); color: var(--c-rose); font-weight:500; }
+    .small-btn.btn-delete:hover { background: rgba(var(--c-rose-rgb),0.15); color: var(--c-rose); border-color: rgba(var(--c-rose-rgb),0.5); }
+    .small-btn.btn-delete-red { border-color: rgba(var(--c-rose-rgb),0.3); background: rgba(var(--c-rose-rgb),0.08); color: var(--c-rose); font-weight:500; }
+    .small-btn.btn-delete-red:hover { background: rgba(var(--c-rose-rgb),0.15); color: var(--c-rose); border-color: rgba(var(--c-rose-rgb),0.5); }
     .small-btn.btn-secondary:hover { background: var(--c-gray-1); border-color: var(--c-gray-4); }
 
     /* ── Chunk Cards ── */
@@ -1129,6 +1187,17 @@
       background: rgba(127,127,127,.1); color: var(--c-text-2);
     }
 
+    /* ── Scene Config Tags ── */
+    .scene-tag {
+      display: inline-flex; align-items: center; gap: 3px;
+      padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;
+      line-height: 1.5; white-space: nowrap; border: 1px solid transparent;
+    }
+    .scene-tag-exact { background: rgba(var(--c-brand-rgb),0.08); color: var(--c-brand); border-color: rgba(var(--c-brand-rgb),0.2); }
+    .scene-tag-fuzzy { background: rgba(245,158,11,0.08); color: #b45309; border-color: rgba(245,158,11,0.2); }
+    .scene-tag-strict { background: rgba(34,139,34,0.08); color: #2d7a2d; border-color: rgba(34,139,34,0.2); }
+    .scene-tag-creative { background: rgba(139,92,246,0.08); color: #6d28d9; border-color: rgba(139,92,246,0.2); }
+
     /* ════════════ KNOWLEDGE BASE PAGE (Figma Design) ════════════ */
     .kb-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 
@@ -1310,13 +1379,25 @@
 
         <!-- Chat history (dynamic) -->
         <div class="sidebar-chat-section" id="sidebarChatSection">
-          <div class="sidebar-chat-header">
-            <span class="sidebar-chat-label">最近聊天</span>
-            <button class="sidebar-chat-search-btn" aria-label="搜索聊天">
+          <div class="sidebar-chat-header" id="sidebarChatHeader">
+            <span class="sidebar-chat-label">
+              <svg viewBox="0 0 1024 1024" fill="currentColor"><path d="M897.9456 0C967.5776 0 1024 57.7024 1024 128.8704v510.2592C1024 710.2976 967.5776 768 897.9456 768h-28.416v32.1024c0 66.56-53.9136 120.4736-120.4736 120.4736H385.3824L204.6464 1024v-103.424H120.5248A120.4736 120.4736 0 0 1 0 800.1024V275.456c0-66.56 53.9136-120.4736 120.4736-120.4736h84.2752L204.8 128.8704C204.8 57.7024 261.2224 0 330.8544 0h567.0912z m-190.72 255.3856H163.1744c-33.28 0-60.2112 26.9824-60.2112 60.2624v443.904c0 33.28 26.9312 60.2112 60.2112 60.2112h125.1328v47.7696l72.3968-47.7696h346.5216c33.28 0 60.2624-26.9824 60.2624-60.2624v-443.904c0-33.2288-26.9824-60.2112-60.2624-60.2112zM409.8048 332.8a51.2 51.2 0 0 1 51.2 51.2v158.7712l129.28 79.6672a51.2 51.2 0 0 1 19.5584 65.1776l-2.8672 5.2736a51.2 51.2 0 0 1-70.4512 16.6912l-153.6-94.72a51.2 51.2 0 0 1-24.32-43.52V384a51.2 51.2 0 0 1 51.2-51.2zM865.792 102.4H363.0592c-29.5936 0-53.8112 23.2448-55.7568 52.5824h441.7536c66.56 0 120.4736 53.9136 120.4736 120.4736v389.888l2.304-0.0512c28.0064-3.072 49.7664-26.9824 49.7664-56.0128V158.72c0-31.1296-24.9856-56.32-55.808-56.32z"/></svg>
+              最近聊天
+            </span>
+            <button class="sidebar-chat-search-btn" id="sidebarChatSearchBtn" aria-label="搜索聊天">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
             </button>
+            <!-- 以搜索按钮为原点展开的搜索框 -->
+            <div class="sidebar-chat-search-box" id="sidebarChatSearchBox">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" id="sidebarChatSearchInput" placeholder="搜索对话" autocomplete="off">
+              <button class="search-close-btn" id="sidebarChatSearchClose" aria-label="关闭搜索">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
           </div>
           <div class="sidebar-chat-list" id="sidebarChatList"></div>
+          <div class="sidebar-chat-search-empty" id="sidebarChatSearchEmpty">未找到匹配的对话</div>
         </div>
 
         <!-- User card at bottom -->
@@ -1441,7 +1522,7 @@
               </div>
 
               <!-- 批量操作栏 -->
-              <div id="kbFileBatchBar" style="display:none;margin-bottom:8px;padding:8px 14px;background:var(--c-gray-1);border-radius:8px;align-items:center;gap:16px;flex-wrap:wrap">
+              <div id="kbFileBatchBar" style="display:none;margin-bottom:8px;padding:8px 14px;align-items:center;gap:16px;flex-wrap:wrap">
                 <span id="kbFileBatchCount" style="font-size:13px;color:var(--c-text-2);margin-right:auto"></span>
                 <button class="btn-delete small-btn" onclick="deleteSelectedFiles()">删除所选</button>
                 <button class="btn-secondary small-btn" onclick="clearFileSelection()">取消</button>
@@ -1566,7 +1647,7 @@
           </div>
         </div>
 
-        <!-- ─────────── 场景配置 (Figma Design) ─────────── -->
+        <!-- ─────────── 场景配置 (场景-响应集) ─────────── -->
         <div class="page-panel" id="panel-faq">
           <div class="page-scroll">
             <div class="sc-page">
@@ -1578,93 +1659,132 @@
                   </div>
                   <div>
                     <h1>场景配置</h1>
-                    <p id="faqLastUpdated">数据更新于 —</p>
+                    <p id="sceneConfigLastUpdated">数据更新于 —</p>
                   </div>
                 </div>
                 <div class="sc-header-actions">
-                  <button class="sc-btn" onclick="loadFaqList()">
+                  <button class="sc-btn" onclick="loadSceneConfigList()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
                     <span>刷新</span>
                   </button>
-                  <button class="sc-btn sc-btn-primary" id="faqAddBtn" onclick="openFaqForm()">
+                  <button class="sc-btn sc-btn-primary" id="sceneConfigAddBtn" onclick="openSceneConfigForm()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                    <span>新建FAQ</span>
+                    <span>新建场景</span>
                   </button>
                 </div>
               </div>
 
               <!-- KPI 统计卡片 -->
-              <div class="sc-kpi-grid">
+              <div class="sc-kpi-grid" style="grid-template-columns:repeat(3,1fr)">
                 <div class="sc-kpi-card">
                   <div class="sc-kpi-icon-box">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 1 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>
                   </div>
                   <div>
                     <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiTotal">0</span><span class="sc-kpi-unit">条</span></div>
-                    <p class="sc-kpi-label">FAQ 总数</p>
+                    <p class="sc-kpi-label">场景总数</p>
                   </div>
                 </div>
                 <div class="sc-kpi-card">
-                  <div class="sc-kpi-icon-box">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                  <div class="sc-kpi-icon-box" style="background:rgba(var(--c-brand-rgb),0.1);color:var(--c-brand)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
                   </div>
                   <div>
-                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiLatest">—</span></div>
-                    <p class="sc-kpi-label">最近更新</p>
+                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiExact">0</span><span class="sc-kpi-unit">条</span></div>
+                    <p class="sc-kpi-label">精准匹配</p>
+                  </div>
+                </div>
+                <div class="sc-kpi-card">
+                  <div class="sc-kpi-icon-box" style="background:rgba(245,158,11,0.1);color:#b45309">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                  </div>
+                  <div>
+                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiFuzzy">0</span><span class="sc-kpi-unit">条</span></div>
+                    <p class="sc-kpi-label">模糊匹配</p>
                   </div>
                 </div>
               </div>
 
               <!-- 列表卡片 -->
-              <div id="faqLoading" class="sc-loading">加载中...</div>
-              <div id="faqTableWrap" style="display:none">
+              <div id="sceneConfigLoading" class="sc-loading">加载中...</div>
+              <div id="sceneConfigTableWrap" style="display:none">
                 <div class="sc-list-card">
                   <div class="sc-list-header">
                     <div>
-                      <h2>FAQ 列表</h2>
-                      <p>常见问题与预设回答</p>
+                      <h2>场景列表</h2>
+                      <p>场景-响应配置集，支持精准/模糊匹配与严格/发散响应</p>
                     </div>
                   </div>
                   <table class="kb-file-table">
                     <thead><tr>
                       <th style="width:50px;text-align:center">编号</th>
-                      <th style="width:35%">问题</th>
-                      <th>回答</th>
-                      <th style="width:150px;text-align:center">创建时间</th>
-                      <th style="width:140px;text-align:center">操作</th>
+                      <th style="min-width:100px">场景名称</th>
+                      <th style="width:90px;text-align:center">匹配模式</th>
+                      <th style="width:90px;text-align:center">响应模式</th>
+                      <th style="width:25%">场景文本</th>
+                      <th>响应内容</th>
+                      <th style="width:120px;text-align:center">操作</th>
                     </tr></thead>
-                    <tbody id="faqTbody"></tbody>
+                    <tbody id="sceneConfigTbody"></tbody>
                   </table>
                 </div>
               </div>
-              <div id="faqEmpty" style="display:none" class="sc-empty-state">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.09 9a3 3 0 1 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>
-                <div class="sc-empty-title">暂无 FAQ</div>
-                <div class="sc-empty-desc">点击"新建FAQ"添加常见问题与预设回答</div>
+              <div id="sceneConfigEmpty" style="display:none" class="sc-empty-state">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><circle cx="17.5" cy="6.5" r="3.5"/><path d="m20 9 2.5 2.5"/></svg>
+                <div class="sc-empty-title">暂无场景配置</div>
+                <div class="sc-empty-desc">点击"新建场景"添加场景-响应规则</div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- FAQ 新增/编辑弹窗 -->
-        <div class="modal-overlay" id="faqMask" style="display:none">
-          <div class="modal-dialog" style="width:640px;max-width:90vw">
-            <div class="modal-header" id="faqModalTitle">新建FAQ</div>
-            <div class="modal-body" style="max-height:60vh;overflow-y:auto">
+        <!-- 场景配置 新增/编辑弹窗 -->
+        <div class="modal-overlay" id="sceneConfigMask" style="display:none">
+          <div class="modal-dialog" style="width:720px;max-width:92vw">
+            <div class="modal-header" id="sceneConfigModalTitle">新建场景</div>
+            <div class="modal-body" style="max-height:64vh;overflow-y:auto">
+              <!-- 场景名称 -->
               <div style="margin-bottom:16px">
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">问题 <span style="color:var(--c-rose)">*</span></label>
-                <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:6px">常见问题</span>
-                <textarea id="faqInputQuestion" rows="3" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入问题..."></textarea>
+                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">场景名称 <span style="color:var(--c-rose)">*</span></label>
+                <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:6px">标识此场景的简短名称</span>
+                <input id="scInputName" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="如：产假咨询、考勤异常申报">
               </div>
+
+              <!-- 匹配模式 -->
+              <div style="margin-bottom:16px">
+                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:6px">匹配模式</label>
+                <div class="seg-toggle" id="scMatchModeToggle" data-value="exact" style="margin-bottom:6px">
+                  <button class="seg-btn active" data-val="exact">精准匹配</button>
+                  <button class="seg-btn" data-val="fuzzy">模糊匹配</button>
+                </div>
+                <span id="scMatchModeHint" style="display:block;font-size:var(--fs-xs);color:var(--c-text-3);font-style:italic">提问与本场景文本几乎完全相同时触发</span>
+              </div>
+
+              <!-- 场景文本 -->
+              <div style="margin-bottom:16px">
+                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">场景文本 <span style="color:var(--c-rose)">*</span></label>
+                <textarea id="scInputMatchText" rows="3" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入需要精确匹配的提问文本"></textarea>
+              </div>
+
+              <!-- 响应模式 -->
+              <div style="margin-bottom:16px">
+                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:6px">响应模式</label>
+                <div class="seg-toggle" id="scResponseModeToggle" data-value="strict" style="margin-bottom:6px">
+                  <button class="seg-btn active" data-val="strict">严格响应</button>
+                  <button class="seg-btn" data-val="creative">发散响应</button>
+                </div>
+                <span id="scResponseModeHint" style="display:block;font-size:var(--fs-xs);color:var(--c-text-3);font-style:italic">按照预设文本一字不差地返回</span>
+              </div>
+
+              <!-- 响应内容 -->
               <div>
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">回答 <span style="color:var(--c-rose)">*</span></label>
-                <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:6px">匹配时返回的预设回答</span>
-                <textarea id="faqInputAnswer" rows="6" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入回答..."></textarea>
+                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">响应内容 <span style="color:var(--c-rose)">*</span></label>
+                <textarea id="scInputResponseText" rows="5" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入固定回答内容，将一字不差地返回给用户"></textarea>
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn-secondary" onclick="closeFaqForm()">取消</button>
-              <button class="btn-primary" onclick="submitFaqForm()">保存</button>
+              <button class="btn-secondary" onclick="closeSceneConfigForm()">取消</button>
+              <button class="btn-primary" onclick="submitSceneConfigForm()">保存</button>
             </div>
           </div>
         </div>
@@ -1808,8 +1928,8 @@
             <input type="radio" name="ifShowRadio" value="false" /> 不展示
           </label>
         </div>
-        <label class="modal-field-label" style="margin-top:12px">文件描述 <span class="help-badge" data-tip="该描述将帮助象象仔快速检索，除非有特别重要的备注，否则无需填写。">?</span></label>
-        <input type="text" class="modal-input" id="fileDescInput" placeholder="选填，置空则由LLM代为生成" style="margin-top:4px" />
+        <label class="modal-field-label" style="margin-top:12px">文件描述 <span class="help-badge" data-tip="该描述将帮助象象仔快速检索，置空则由大模型代为生成。">?</span></label>
+        <input type="text" class="modal-input" id="fileDescInput" placeholder="选填，若非必要，不建议填写" style="margin-top:4px" />
       </div>
     </div>
     <div class="modal-footer">
@@ -2083,7 +2203,7 @@
     if (pageId === 'stats') loadStats();
     if (pageId === 'knowledge') { loadFileList(); restoreUploadTasks(); }
     if (pageId === 'scene') loadSceneList();
-    if (pageId === 'faq') loadFaqList();
+    if (pageId === 'faq') loadSceneConfigList();
   }
 
   function renderSidebarNav() {
@@ -3171,6 +3291,90 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     return new Date(isoStr).toLocaleDateString();
   }
 
+  /* ── 侧边栏会话搜索：以搜索按钮为原点展开搜索框 + 实时过滤 ── */
+  (function initSidebarChatSearch() {
+    const searchBtn   = document.getElementById('sidebarChatSearchBtn');
+    const header      = document.getElementById('sidebarChatHeader');
+    const searchBox   = document.getElementById('sidebarChatSearchBox');
+    const searchInput = document.getElementById('sidebarChatSearchInput');
+    const closeBtn    = document.getElementById('sidebarChatSearchClose');
+    const emptyTip    = document.getElementById('sidebarChatSearchEmpty');
+    if (!searchBtn || !searchBox || !searchInput || !closeBtn) return;
+
+    let searchOpen = false;
+
+    function toggleSearch(open) {
+      searchOpen = (typeof open === 'boolean') ? open : !searchOpen;
+      searchBox.classList.toggle('open', searchOpen);
+      header.classList.toggle('searching', searchOpen);
+      if (searchOpen) {
+        setTimeout(() => searchInput.focus(), 280);
+      } else {
+        searchInput.value = '';
+        filterChatList('');
+      }
+    }
+
+    function filterChatList(query) {
+      const q = query.trim().toLowerCase();
+      const items = document.querySelectorAll('.sidebar-chat-item');
+      let visibleCount = 0;
+      items.forEach(item => {
+        if (!q) {
+          item.classList.remove('hidden-by-search');
+          visibleCount++;
+          return;
+        }
+        const titleEl = item.querySelector('.chat-item-title');
+        const title = titleEl ? titleEl.textContent.toLowerCase() : '';
+        if (title.includes(q)) {
+          item.classList.remove('hidden-by-search');
+          visibleCount++;
+        } else {
+          item.classList.add('hidden-by-search');
+        }
+      });
+      if (emptyTip) {
+        emptyTip.classList.toggle('visible', !!q && visibleCount === 0);
+      }
+    }
+
+    // 点击搜索按钮 → 以按钮为原点展开搜索框
+    searchBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSearch();
+    });
+
+    // 输入实时过滤
+    searchInput.addEventListener('input', () => {
+      filterChatList(searchInput.value);
+    });
+
+    // 点击 X → 关闭搜索框，恢复原状态
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSearch(false);
+    });
+
+    // ESC 收起搜索框
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        toggleSearch(false);
+      }
+    });
+
+    // 侧边栏折叠时自动收起搜索框
+    const sidebarWrapper = document.getElementById('sidebarWrapper');
+    if (sidebarWrapper && window.MutationObserver) {
+      const observer = new MutationObserver(() => {
+        if (sidebarWrapper.classList.contains('collapsed') && searchOpen) {
+          toggleSearch(false);
+        }
+      });
+      observer.observe(sidebarWrapper, { attributes: true, attributeFilter: ['class'] });
+    }
+  })();
+
   async function loadSessionList() {
     try {
       const res = await apiFetch('/sessions');
@@ -3713,6 +3917,9 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const tg = btn.closest('.seg-toggle');
     if (!tg) return;
     _setSegToggle(tg.id, btn.dataset.val);
+    // 场景配置弹窗的动态提示
+    if (tg.id === 'scMatchModeToggle') updateMatchModeHint();
+    if (tg.id === 'scResponseModeToggle') updateResponseModeHint();
   });
 
   async function loadSceneList() {
@@ -3842,129 +4049,199 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     });
   }
 
-  // ==================== FAQ 管理 ====================
-  let _faqList = [];
-  let _editingFaqId = null;   // null=新增, 数字=编辑
+  // ==================== 场景配置 (场景-响应集) ====================
+  let _sceneConfigList = [];
+  let _editingSceneConfigId = null;
 
-  async function loadFaqList() {
-    const loading = document.getElementById('faqLoading');
-    const wrap = document.getElementById('faqTableWrap');
-    const empty = document.getElementById('faqEmpty');
-    const addBtn = document.getElementById('faqAddBtn');
+  const _matchModeHints = {
+    exact: '提问与本场景文本几乎完全相同时触发',
+    fuzzy: '提问可归为场景所代表的情形时触发',
+  };
+  const _responseModeHints = {
+    strict: '按照预设文本一字不差地返回',
+    creative: '按照设定的模式进行生成和响应',
+  };
+
+  async function loadSceneConfigList() {
+    const loading = document.getElementById('sceneConfigLoading');
+    const wrap = document.getElementById('sceneConfigTableWrap');
+    const empty = document.getElementById('sceneConfigEmpty');
+    const addBtn = document.getElementById('sceneConfigAddBtn');
     loading.style.display = ''; wrap.style.display = 'none'; empty.style.display = 'none';
     addBtn.style.display = hasPermission('faq:save') ? '' : 'none';
     try {
-      const res = await apiFetch('/api/v1/faq');
+      const res = await apiFetch('/api/v1/scene-templates');
       const data = await res.json();
-      _faqList = (data.code === 200 && data.data) || [];
-      renderFaqTable();
-      updateFaqKpi();
+      _sceneConfigList = (data.code === 200 && data.data) || [];
+      renderSceneConfigTable();
+      updateSceneConfigKpi();
       loading.style.display = 'none';
-      if (!_faqList.length) { empty.style.display = ''; }
+      if (!_sceneConfigList.length) { empty.style.display = ''; }
       else { wrap.style.display = ''; }
     } catch (e) {
       loading.textContent = '加载失败：' + e.message;
     }
   }
 
-  function updateFaqKpi() {
-    const totalEl = document.getElementById('scKpiTotal');
-    const latestEl = document.getElementById('scKpiLatest');
-    const lastUpdatedEl = document.getElementById('faqLastUpdated');
-    if (totalEl) totalEl.textContent = _faqList.length;
-    if (latestEl) {
-      const sorted = [..._faqList].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
-      latestEl.textContent = sorted[0] && sorted[0].created_at
-        ? new Date(sorted[0].created_at).toLocaleDateString('zh-CN')
-        : '—';
-      const unit = latestEl.nextElementSibling;
-      if (unit && sorted[0] && sorted[0].created_at) unit.textContent = '';
-    }
-    if (lastUpdatedEl) lastUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
+  function updateSceneConfigKpi() {
+    const total = _sceneConfigList.length;
+    const exact = _sceneConfigList.filter(s => (s.match_mode || 'exact') === 'exact').length;
+    const fuzzy = _sceneConfigList.filter(s => s.match_mode === 'fuzzy').length;
+    const elTotal = document.getElementById('scKpiTotal');
+    const elExact = document.getElementById('scKpiExact');
+    const elFuzzy = document.getElementById('scKpiFuzzy');
+    const elUpdated = document.getElementById('sceneConfigLastUpdated');
+    if (elTotal) elTotal.textContent = total;
+    if (elExact) elExact.textContent = exact;
+    if (elFuzzy) elFuzzy.textContent = fuzzy;
+    if (elUpdated) elUpdated.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
   }
 
-  function renderFaqTable() {
-    const tbody = document.getElementById('faqTbody');
+  function _matchModeTag(mode) {
+    if (mode === 'fuzzy') return '<span class="scene-tag scene-tag-fuzzy">模糊匹配</span>';
+    return '<span class="scene-tag scene-tag-exact">精准匹配</span>';
+  }
+  function _responseModeTag(mode) {
+    if (mode === 'creative') return '<span class="scene-tag scene-tag-creative">发散响应</span>';
+    return '<span class="scene-tag scene-tag-strict">严格响应</span>';
+  }
+
+  function renderSceneConfigTable() {
+    const tbody = document.getElementById('sceneConfigTbody');
     const canSave = hasPermission('faq:save');
     const canDelete = hasPermission('faq:delete');
-    const sorted = [..._faqList].sort((a, b) => a.id - b.id);
-    tbody.innerHTML = sorted.map(f => {
-      const ans = (f.answer || '').length > 120 ? (f.answer || '').slice(0, 120) + '…' : (f.answer || '');
-      const created = f.created_at ? new Date(f.created_at).toLocaleString('en-GB', {hour12: false}) : '—';
+    const sorted = [..._sceneConfigList].sort((a, b) => (a.id || 0) - (b.id || 0));
+    const cellStyle = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0';
+    tbody.innerHTML = sorted.map(s => {
+      const matchMode = s.match_mode || 'exact';
+      const responseMode = s.response_mode || (s.answer_mode === 'literal' ? 'strict' : 'creative');
+      const matchText = s.trigger || s.match_text || '';
+      const responseText = s.answer_template || s.response_text || '';
+      const mt = matchText.length > 40 ? matchText.slice(0, 40) + '…' : matchText;
+      const rt = responseText.length > 80 ? responseText.slice(0, 80) + '…' : responseText;
+      const safeName = escapeHtml(s.name || s.scene_id || '');
       return `<tr>
-        <td style="text-align:center">${f.id}</td>
-        <td>${escapeHtml(f.question || '')}</td>
-        <td style="color:var(--c-text-2)">${escapeHtml(ans)}</td>
-        <td style="text-align:center;font-size:var(--fs-xs);color:var(--c-text-3)">${created}</td>
+        <td style="text-align:center">${s.id || '—'}</td>
+        <td style="white-space:nowrap;font-weight:500">${safeName}</td>
+        <td style="text-align:center">${_matchModeTag(matchMode)}</td>
+        <td style="text-align:center">${_responseModeTag(responseMode)}</td>
+        <td style="${cellStyle};color:var(--c-text-2)">${escapeHtml(mt) || '—'}</td>
+        <td style="${cellStyle};color:var(--c-text-3);font-size:var(--fs-xs)">${escapeHtml(rt) || '—'}</td>
         <td style="text-align:center;white-space:nowrap">
-          ${canSave ? `<button class="btn-secondary small-btn" style="font-size:var(--fs-xs);padding:4px 10px" onclick="openFaqForm(${f.id})">Edit</button>` : ''}
-          ${canDelete ? `<button class="btn-delete-red small-btn" style="font-size:var(--fs-xs);padding:4px 10px;margin-left:4px" onclick="confirmDeleteFaq(${f.id}, ${JSON.stringify(f.question || '').replace(/"/g,'&quot;')})">Delete</button>` : ''}
+          ${canSave ? `<button class="btn-secondary small-btn" style="font-size:var(--fs-xs);padding:4px 10px" onclick="openSceneConfigForm('${(s.scene_id||'').replace(/'/g, "\\'")}')">编辑</button>` : ''}
+          ${canDelete ? `<button class="btn-delete-red small-btn" style="font-size:var(--fs-xs);padding:4px 10px;margin-left:4px" onclick="confirmDeleteSceneConfig('${(s.scene_id||'').replace(/'/g, "\\'")}', '${safeName}')">删除</button>` : ''}
         </td>
       </tr>`;
     }).join('');
   }
 
-  function openFaqForm(id) {
-    const mask = document.getElementById('faqMask');
-    const title = document.getElementById('faqModalTitle');
-    const qInput = document.getElementById('faqInputQuestion');
-    const aInput = document.getElementById('faqInputAnswer');
-    if (id) {
-      _editingFaqId = id;
-      const f = _faqList.find(x => x.id === id) || {};
-      title.textContent = '编辑FAQ';
-      qInput.value = f.question || '';
-      aInput.value = f.answer || '';
-    } else {
-      _editingFaqId = null;
-      title.textContent = '新建FAQ';
-      qInput.value = '';
-      aInput.value = '';
+  function updateMatchModeHint() {
+    const mode = _getSegToggle('scMatchModeToggle');
+    const hint = document.getElementById('scMatchModeHint');
+    const ta = document.getElementById('scInputMatchText');
+    if (hint) hint.textContent = _matchModeHints[mode] || '';
+    if (ta) {
+      ta.placeholder = mode === 'fuzzy'
+        ? '描述场景情形，如：用户询问产假、陪产假、生育津贴等相关问题'
+        : '输入需要精确匹配的提问文本，如：公司产假多少天？';
     }
+  }
+
+  function updateResponseModeHint() {
+    const mode = _getSegToggle('scResponseModeToggle');
+    const hint = document.getElementById('scResponseModeHint');
+    const ta = document.getElementById('scInputResponseText');
+    if (hint) hint.textContent = _responseModeHints[mode] || '';
+    if (ta) {
+      ta.placeholder = mode === 'creative'
+        ? '输入响应模式/指令，如：回答分三部分：1.政策规定 2.申请材料 3.申请流程'
+        : '输入固定回答内容，将一字不差地返回给用户';
+    }
+  }
+
+  function openSceneConfigForm(sceneKey) {
+    const mask = document.getElementById('sceneConfigMask');
+    const title = document.getElementById('sceneConfigModalTitle');
+    if (sceneKey) {
+      _editingSceneConfigId = sceneKey;
+      const s = _sceneConfigList.find(x => x.scene_id === sceneKey) || {};
+      title.textContent = '编辑场景';
+      document.getElementById('scInputName').value = s.name || '';
+      _setSegToggle('scMatchModeToggle', s.match_mode || 'exact');
+      document.getElementById('scInputMatchText').value = s.trigger || s.match_text || '';
+      _setSegToggle('scResponseModeToggle', s.response_mode || (s.answer_mode === 'literal' ? 'strict' : 'creative'));
+      document.getElementById('scInputResponseText').value = s.answer_template || s.response_text || '';
+    } else {
+      _editingSceneConfigId = null;
+      title.textContent = '新建场景';
+      document.getElementById('scInputName').value = '';
+      _setSegToggle('scMatchModeToggle', 'exact');
+      document.getElementById('scInputMatchText').value = '';
+      _setSegToggle('scResponseModeToggle', 'strict');
+      document.getElementById('scInputResponseText').value = '';
+    }
+    updateMatchModeHint();
+    updateResponseModeHint();
     mask.style.display = 'flex';
   }
 
-  function closeFaqForm() {
-    document.getElementById('faqMask').style.display = 'none';
-    _editingFaqId = null;
+  function closeSceneConfigForm() {
+    document.getElementById('sceneConfigMask').style.display = 'none';
+    _editingSceneConfigId = null;
   }
 
-  async function submitFaqForm() {
-    const qEl = document.getElementById('faqInputQuestion');
-    const aEl = document.getElementById('faqInputAnswer');
-    const question = qEl.value.trim();
-    const answer = aEl.value.trim();
-    qEl.style.borderColor = ''; aEl.style.borderColor = '';
+  async function submitSceneConfigForm() {
+    const nameEl = document.getElementById('scInputName');
+    const mtEl = document.getElementById('scInputMatchText');
+    const rtEl = document.getElementById('scInputResponseText');
+    const name = nameEl.value.trim();
+    const matchText = mtEl.value.trim();
+    const responseText = rtEl.value.trim();
+    const matchMode = _getSegToggle('scMatchModeToggle');
+    const responseMode = _getSegToggle('scResponseModeToggle');
+    nameEl.style.borderColor = ''; mtEl.style.borderColor = ''; rtEl.style.borderColor = '';
     let missing = [];
-    if (!question) { qEl.style.borderColor = 'var(--c-rose)'; missing.push('Question'); }
-    if (!answer) { aEl.style.borderColor = 'var(--c-rose)'; missing.push('Answer'); }
+    if (!name) { nameEl.style.borderColor = 'var(--c-rose)'; missing.push('场景名称'); }
+    if (!matchText) { mtEl.style.borderColor = 'var(--c-rose)'; missing.push('场景文本'); }
+    if (!responseText) { rtEl.style.borderColor = 'var(--c-rose)'; missing.push('响应内容'); }
     if (missing.length) { await showAlert('必填', `${missing.join('、')}为必填项`); return; }
-    const isEdit = _editingFaqId !== null;
-    const url = isEdit ? `/api/v1/faq/${_editingFaqId}` : '/api/v1/faq';
+    const isEdit = _editingSceneConfigId !== null;
+    const payload = {
+      name,
+      match_mode: matchMode,
+      response_mode: responseMode,
+      trigger: matchText,
+      answer_template: responseText,
+      answer_mode: responseMode === 'strict' ? 'literal' : 'prompt',
+    };
+    const url = isEdit
+      ? `/api/v1/scene-templates/${encodeURIComponent(_editingSceneConfigId)}`
+      : '/api/v1/scene-templates';
     const method = isEdit ? 'PUT' : 'POST';
+    if (!isEdit) payload.scene_id = name.replace(/\s+/g, '_').toLowerCase();
     try {
       const res = await apiFetch(url, {
         method, headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({ question, answer }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (data.code !== 200) throw new Error(data.message || '保存失败');
-      closeFaqForm();
-      await loadFaqList();
+      closeSceneConfigForm();
+      await loadSceneConfigList();
       await showAlert('成功', '已保存');
     } catch (e) {
       await showAlert('错误', e.message);
     }
   }
 
-  function confirmDeleteFaq(id, question) {
-    showConfirm('删除FAQ', `删除FAQ "${question}"?`).then(async (ok) => {
+  function confirmDeleteSceneConfig(sceneKey, name) {
+    showConfirm('删除场景', `删除场景"${name}"（${sceneKey}）？这将立即禁用该场景。`).then(async (ok) => {
       if (!ok) return;
       try {
-        const res = await apiFetch(`/api/v1/faq/${id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/v1/scene-templates/${encodeURIComponent(sceneKey)}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.code !== 200) throw new Error(data.message || '删除失败');
-        await loadFaqList();
+        await loadSceneConfigList();
       } catch (e) {
         await showAlert('错误', e.message);
       }

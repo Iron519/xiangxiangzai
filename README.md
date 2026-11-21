@@ -43,20 +43,21 @@
 
 所以鉴权只需要一用户张，维护全部内容 —— 表名： `myagent_user`
 
-```sql
-CREATE TABLE myagent_user (
-    id              bigserial PRIMARY KEY,
-    uid             varchar(5)  NOT NULL UNIQUE DEFAULT lpad(nextval('user_uid_seq')::text, 5, '0'),
-    username        varchar(30) NOT NULL,
-    password_hash   varchar(200) NOT NULL,
-    apply_reason    text         NOT NULL DEFAULT '',
-    approved        boolean      NOT NULL DEFAULT false,
-    remark          text         NOT NULL DEFAULT '',
-    deleted         boolean      NOT NULL DEFAULT false,
-    create_time     timestamp    NOT NULL DEFAULT now(),
-    update_time     timestamp    NOT NULL DEFAULT now()
-);
-```
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | bigserial PK | 自增主键 |
+| uid | varchar(5) UNIQUE | 5位数字编号，自增序列填充，默认 `lpad(nextval('user_uid_seq'), 5, '0')` |
+| username | varchar(30) | 用户名 |
+| password_hash | varchar(200) | bcrypt 密码哈希 |
+| apply_reason | text | 注册申请理由 |
+| approved | boolean | 是否已审批，默认 false |
+| remark | text | 备注 |
+| deleted | boolean | 软删标记，默认 false |
+| profile | jsonb | 用户画像，默认 NULL |
+| profile_updated_at | timestamptz | 画像最后更新时间，默认 NULL |
+| create_time | timestamp | 创建时间，默认 now() |
+| update_time | timestamp | 更新时间，默认 now() |
+
 
 而客户的终端用户与客户共用一个账号密码，相当于产品的 `access key`。由于一个 `access key` 只对应一个用户，无法区分用户，也就无法创建用户体系进行管理。
 
@@ -105,10 +106,10 @@ LibreOffice | routes.py | 本地功能 | PPT -> PDF | 无需连接池
 3）点开`更多选项`后，有3个选项：
 
 - 文件期限：文件的到期时间，默认永久有效，过期文件不会删除，但是将不被任何节点检索，形同删除
-- 图片展示：文件内图片是否在对话时展示给用户，默认展示，无论选择展示与否，不影响解析阶段提取“图片-内容”锚点映射到anchor.json中，其之影响前端渲染
+- 图片展示：文件内图片是否在对话时展示给用户，默认展示，无论选择展示与否，不影响解析阶段提取 “图片-内容” 锚点映射到`anchor.json`中，只影响前端渲染
 - 文件描述：对该文件的归纳性描述，选填，不填则由LLM生成，这将影响用户问询是否会启用检索，因为用户问询会结合该描述，再去和文件标签进行匹配，所以话术中提示用户若非必要，无需填写
 
-4）用户可以查看admin和自己上传的文件，但仅能操作自己上传的文件，只有当以下3种来源的数据齐备时，前端页面才能看到该文件，否则将静默消失，3种来源为：
+4）用户可以查看admin和自己上传的文件，但仅能操作自己上传的文件，只有当以下3种来源的数据齐备时，前端页面才能看到该文件，否则将在文件列表展示 ”❌不完整“ 的报错，3种来源为：
 
 - **upload_kb** 的原文件
 - **parse_result** 的解析结果/过程性文件
@@ -376,19 +377,31 @@ parse_result/{uid}/{display_name}/
   - `_refresh_content_tsv()` — 调用 `rag/tokenizer.py` 的 `tokenize_for_tsv()` 做 **jieba 分词** → `to_tsvector('simple', ...)` 写入 content_tsv
 - **目标表**：`myagent_kb_chunks`（DDL 在 `table_data/create_all_tables.py`）
 
-  | 字段 | 类型 | 说明 |
-  |---|---|---|
-  | chunk_index | BIGINT PK | 全局唯一递增 |
-  | child_content | TEXT | 子块内容（检索单元） |
-  | parent_content | TEXT | 父块原文（rerank + sources） |
-  | group_id | BIGINT | 父块ID（查找兄弟子块） |
-  | internal_id | TEXT | 父块内子块序号 |
-  | embedding | vector(4096) | 向量嵌入 |
-  | content_tsv | TSVECTOR | 全文检索列 |
-  | related_image_url | TEXT | 图片URL |
-  | text_hash | TEXT | 内容哈希 |
-  | metadata | JSONB | 文件描述+标签 |
-  | **UNIQUE** | (uid, file_name, text_hash) | **内容级去重键** |
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| chunk_index | BIGINT PK | 全局唯一递增 |
+| uid | VARCHAR(5) | 用户编号，默认 '' |
+| original_name | TEXT | 原始文件名，默认 '' |
+| child_content | TEXT | 子块内容（检索单元） |
+| file_path | TEXT | 文件存储路径 |
+| file_name | TEXT | 展示文件名 |
+| text_hash | TEXT | 内容哈希 |
+| file_size | BIGINT | 文件大小（字节），默认 0 |
+| metadata | JSONB | 文件描述+标签，默认 '{}' |
+| group_id | BIGINT | 父块ID（查找兄弟子块），默认 0 |
+| internal_id | TEXT | 父块内子块序号，默认 '' |
+| parent_content | TEXT | 父块原文（rerank + sources），默认 '' |
+| related_image_url | TEXT | 图片URL，默认 '' |
+| if_show | BOOLEAN | 是否展示给用户，默认 TRUE |
+| embedding | vector(1024) | 向量嵌入 |
+| embedding_dim | INT | 向量维度，默认 1024 |
+| content_tsv | TSVECTOR | 全文检索列（jieba分词），默认 NULL |
+| upload_time | TIMESTAMPTZ | 上传时间，默认 NULL |
+| update_time | TIMESTAMPTZ | 更新时间，默认 NULL |
+| expire_time | TIMESTAMPTZ | 过期时间，默认 NULL |
+| extra_info | TEXT | 额外信息，默认 '' |
+| **UNIQUE** | (uid, file_name, text_hash) | **内容级去重键** |
+
 
 **Step 7: 异步打标**
 
