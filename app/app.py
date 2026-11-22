@@ -17,7 +17,7 @@ PROJECT_ROOT = os.getenv("WORK_PATH", "")
 if __package__ in {None, ""} and PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from calculate_logic.rag.generate_answer import router as chat_router, close_all_connections, preload_faq_index
+from calculate_logic.rag.generate_answer import router as chat_router, close_all_connections
 from app.warmup import run_sync_warmup, run_async_warmup
 from table_data.chat_report import router as report_router, close_report_pool
 from calculate_logic.chunk_pipeline.routes import router as chunk_router
@@ -25,7 +25,6 @@ from calculate_logic.chunk_pipeline.routes import recover_queued_tasks
 from sso_did.auth_service import auth_router, users_router
 from sso_did.auth import get_current_user, TokenData
 from sso_did.user_profile import router as profile_router, start_profile_loop, stop_profile_loop, close_profile_pool
-from calculate_logic.fetch_knowledge.faq_mgmt import router as faq_router
 from calculate_logic.rag.scene_template_mgmt import router as scene_template_router
 
 # ================= 配置运行日志 =================
@@ -63,7 +62,6 @@ app.include_router(chunk_router)
 app.include_router(report_router)
 app.include_router(auth_router)
 app.include_router(users_router)
-app.include_router(faq_router)
 app.include_router(scene_template_router)
 app.include_router(profile_router)
 

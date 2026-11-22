@@ -462,7 +462,7 @@ POST /kb/file/{file_name}/rechunk → _background_rechunk()
 
 ## 四、检索
 
-检索系统基于 LangGraph 状态机编排，从用户提问到最终回答，经过检索规划、FAQ 匹配、混合检索、生成回答等环节，并辅以敏感话题检测、场景判定、流式输出等机制。
+检索系统基于 LangGraph 状态机编排，从用户提问到最终回答，经过检索规划、场景判定（含 FAQ 短路）、混合检索、生成回答等环节，并辅以敏感话题检测、流式输出等机制。
 
 ### 1. 概述
 
@@ -487,30 +487,32 @@ POST /kb/file/{file_name}/rechunk → _background_rechunk()
 chat_stream (入口)
   ├── Session 管理（新建/校验/超限软删）
   ├── 加载历史消息（Checkpoint 恢复）
-  ├── 并行判定: _judge_sensitive + _judge_scene + _generate_session_title
+  ├── 并行判定: _judge_sensitive + _judge_scene + _generate_session_title + node_plan_retrieval
   ├── 敏感命中 → 直接返回固定话术
+  ├── 场景命中(answer_type=faq) → 直接返回预设答案，跳过主图
+  ├── 场景命中(answer_type=llm) → 注入 scene_id，跳过检索直接生成
   └── 启动主图: graph.astream_events → SSE 流式输出
                     │
                     ▼
-              node_plan_retrieval (检索规划)
+              node_plan_retrieval (检索规划，预计算时跳过)
                     │
               route_plan_retrieval (条件路由)
-              ┌─────┼──────────┐
-          无文件 │  有标签    │  无标签+skip
+              ┌─────┼──────────┐──────────┐
+          无文件 │  有标签    │  无标签+skip │ 场景命中
+              │     │          │          │
+     node_no_kb_hit node_retrieve node_retrieve node_generate
               │     │          │
-     node_no_kb_hit node_faq_match node_retrieve
-              │     │          │
-              │  route_faq_match route_retrieve_result
-              │  ┌────┴───┐    ┌────┴────┐
-              │  命中  未命中 空context  非空
-              │   │      │      │        │
-              │  END  node_retrieve node_no_kb_hit node_generate
-              │           │                    │
-              │    route_retrieve_result  tools_condition
-              │     ┌────┴────┐         ┌────┴────┐
-              │  空context  非空    tools      END
-              │     │       │        │
-              │ node_no_kb_hit node_generate ←─ tool_node (循环)
+              │     │    route_retrieve_result
+              │     │    ┌────┴────┐
+              │     │  空context  非空
+              │     │    │        │
+              │     │ node_no_kb_hit node_generate
+              │     │              │
+              │     │       tools_condition
+              │     │       ┌────┴────┐
+              │     │     tools      END
+              │     │      │
+              │     │ tool_node (循环)
               │     │
               └────END
 ```
@@ -522,7 +524,6 @@ chat_stream (入口)
 | 节点 | 函数 | 行号 | 职责 |
 |---|---|---|---|
 | `node_plan_retrieval` | 入口节点 | 266 | 检索策略规划（指代消解 + 标签匹配 + 参数决策） |
-| `node_faq_match` | FAQ 匹配 | 673 | BM25+IDF 加权匹配，命中直接返回 |
 | `node_retrieve` | 执行检索 | 755 | 调用混合检索器 + 兄弟子块扩展 |
 | `node_no_kb_hit` | 未命中兜底 | 788 | 返回固定话术，不经 LLM |
 | `tool_node` | 工具节点 | 140 | 执行工具调用（假期/工时/个人信息查询） |
@@ -533,8 +534,7 @@ chat_stream (入口)
 | 起点 | 路由函数 | 条件 | 目标 |
 |---|---|---|---|
 | START | - | - | `node_plan_retrieval` |
-| `node_plan_retrieval` | `route_plan_retrieval` | 无文件 → `node_no_kb_hit`；有标签 → `node_faq_match`；无标签+skip → `node_retrieve`；无标签+不skip → `node_no_kb_hit` | 条件分支 |
-| `node_faq_match` | `route_faq_match` | mode=faq → END；否则 → `node_retrieve` | 条件分支 |
+| `node_plan_retrieval` | `route_plan_retrieval` | 场景命中 → `node_generate`；无文件 → `node_no_kb_hit`；有标签 → `node_retrieve`；无标签+skip → `node_retrieve`；无标签+不skip → `node_no_kb_hit` | 条件分支 |
 | `node_retrieve` | `route_retrieve_result` | context 空 → `node_no_kb_hit`；非空 → `node_generate` | 条件分支 |
 | `node_no_kb_hit` | - | - | END |
 | `node_generate` | `tools_condition` | 有 tool_calls → `tool_node`；无 → END | 条件分支 |
@@ -548,7 +548,7 @@ chat_stream (入口)
 | `messages` | `Annotated[list, add_messages]` | 历史消息（追加而非覆盖） |
 | `context` | str | 检索到的上下文 |
 | `sources` | list | 检索信息来源 |
-| `mode` | str | 当前对话意图（rag/faq/sensitive/chitchat） |
+| `mode` | str | 当前对话意图（rag/faq/sensitive） |
 | `final_answer` | str | AI 最终回答 |
 | `turn_count` | int | 对话轮次计数 |
 | `query` | `Optional[str]` | 当前查询（LLM 重写后覆盖原始问题） |
@@ -620,45 +620,120 @@ chat_stream (入口)
 
 | 条件 | 路由目标 | 含义 |
 |---|---|---|
+| `state["scene"]` 非空 | `node_generate` | 场景命中，跳过检索直接生成 |
 | `file_descriptions` 为空 | `node_no_kb_hit` | 知识库无文件，直接兜底 |
-| `target_tags` 非空 | `node_faq_match` | 有标签 → 先尝试 FAQ 匹配 |
+| `target_tags` 非空 | `node_retrieve` | 有标签 → 直接走检索 |
 | `target_tags` 空 + `skip_tag_filter=True` | `node_retrieve` | 术语未匹配标签 → 全局检索 |
 | `target_tags` 空 + `skip_tag_filter=False` | `node_no_kb_hit` | 问题与知识库无关（纯闲聊） |
 
 **关键设计**：没有独立的 chitchat 检测节点，而是通过标签匹配结果隐式决定——纯闲聊（无标签+不skip）直接走兜底话术，避免浪费检索和生成资源。
 
-### 4. FAQ 快速匹配
+### 4. 场景判定与分流
 
-#### 4.1. BM25 + IDF 加权匹配
+场景模板和 FAQ 已合并为一张表 `myagent_scene_templates`，通过 `answer_type` 字段区分行为。Jev Choice 判断命中哪个场景，数据库决定命中后怎么处理。
 
-`node_faq_match` 使用 BM25Plus 算法匹配预设的 FAQ 问答对，命中则直接返回答案，跳过检索和生成。
+#### 4.1. 统一表结构
 
-**索引构建**（`_load_faq`，进程内缓存 + 双重检查锁）：
-1. 从 PG 加载全部 FAQ Q&A
-2. 从 KB 全量表加载 `parent_content` 构建 IDF
-3. `_FaqBM25(BM25Plus)`：继承 BM25Plus，**用 KB 语料 IDF 覆盖 FAQ 自身 IDF** — 使 FAQ 匹配的词频权重基于全局语料而非仅 FAQ 内部
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `id` | BIGSERIAL PK | 自增主键 |
+| `scene_id` | TEXT UNIQUE | 场景标识（Jev Choice 的 criteria key） |
+| `name` | TEXT | 场景名称 |
+| `trigger` | TEXT | 触发描述（用户自填，喂给 Jev 判断） |
+| `answer_type` | TEXT | `'faq'` = 直接返回 answer_template；`'llm'` = 注入 answer_template 到 LLM prompt |
+| `answer_template` | TEXT | answer_type='faq' 时为固定答案；answer_type='llm' 时为注入规则 |
+| `followup_prompt` | TEXT | 追问提示（两种类型都可选，配了则完全替代 LLM 生成的追问） |
 
-#### 4.2. 双阈值命中
+- **条目上限 50 条**（Jev Choice 上限 255，50 条留足余量保证准确率）
+- CRUD 接口和前端新建时双重校验上限
+- `scene_id` 唯一约束 + 后端二次校验 + DB UNIQUE 兜底
 
-```python
-tokens = jieba.cut(query)          # 分词
-scores = bm25.get_scores(tokens)   # BM25 得分
-ranked = sorted(enumerate(scores), reverse=True)
+#### 4.2. 判定机制（_judge_scene）
 
-# 绝对相关度：查询词的 IDF 加权覆盖率
-coverage = hit_weight / total_weight
+`_judge_scene` 返回 `(scene_id, answer_type)` 元组：
 
-# 相对区分度：TOP1 / (TOP1 + TOP2)
-ratio = top1_score / (top1_score + top2_score)
-
-# 双阈值命中
-if coverage >= FAQ_COVERAGE_THRESHOLD and ratio >= FAQ_RATIO_THRESHOLD:
-    return FAQ答案   # mode=faq → END
-else:
-    → node_retrieve  # mode=rag，继续走检索
+```
+_load_scenes()  从 PG 查表 → scenes 列表（含 answer_type 字段）
+    │
+    ▼
+_judge_scene(query, scenes)
+    │
+    │  构造 criteria：
+    │    {scene_id: "{name}：{trigger}", ...} + {"other": "其他：不属于以上任何场景的问题"}
+    │
+    │  Jev Choice 从所有选项（含 other）中选一个
+    │  （Jev 只负责"命中哪个场景"，不判断怎么处理）
+    │
+    ▼
+hit_id = Jev 选中的选项
+    │
+    ├─ hit_id == "other" 或不在有效场景 ID 集合中 → 未命中，return ("", "")
+    │
+    └─ hit_id 在有效场景 ID 集合中
+          │  answer_type = scene_map[hit_id]["answer_type"]
+          │  （从内存中的 scene 对象直接取，用户在前端配置时存的值）
+          │
+          ▼
+       return (hit_id, answer_type)  ← ("maternity", "llm") 或 ("", "")
 ```
 
-**设计要点**：双阈值兼顾"问题与 FAQ 的绝对相似度"和"与其他问题的区分度"，避免仅因词频碰巧高就误命中。
+| 层次 | 机制 | 阈值/超时 |
+|---|---|---|
+| 第一层 | Jev Choice（含 other 选项） | choice != "other" 且在有效场景 ID 集合中 → 命中，超时 15s |
+| 第二层 | LLM 兜底（Jev 异常时降级） | 返回 `{"scene": "场景id"}` 或 `{"scene": "none"}` |
+
+**为什么用 other 选项而不是 Noul 守门**：
+
+早期方案用 Choice 选场景 + Noul 判断"是否命中"（>0.7 才认），实测 Noul 不可靠——Noul 的 instructions 里写了"闲聊未命中"，导致"你好呀"这类正常问候也被当闲聊挡掉（Noul=0.08），8 个测试用例 0/8 命中。
+
+改用 other 选项后，Choice 有了"不匹配"的出口，不匹配的问题概率会自然集中到 other 上，匹配的问题概率集中在对应场景上。同样 8 个测试用例 8/8 全对：
+
+| 用户输入 | Choice 结果 | 命中？ |
+|---|---|---|
+| "你好呀" | say_hi (1.0) | ✓ |
+| "嗨" | say_hi (1.0) | ✓ |
+| "产假怎么休" | maternity (1.0) | ✓ |
+| "年假还剩多少天" | leave (1.0) | ✓ |
+| "你好" | say_hi (1.0) | ✓ |
+| "早上好" | say_hi (1.0) | ✓ |
+| "今天天气不错" | other (0.91) | ✗ 正确拒绝 |
+| "A40怎么维护" | other (1.0) | ✗ 正确拒绝 |
+
+**关键解耦**：Jev 决定"命中哪个场景"，数据库决定"这个场景命中后怎么处理"。用户改 `answer_type` 不需要重新训练或调整 Jev，改了立即生效。
+
+#### 4.3. 分流逻辑（stream_response）
+
+`_judge_scene` 返回 `(scene_id, answer_type)` 后，在 `stream_response` 中分流：
+
+```
+(scene_id, answer_type)
+    │
+    ├─ answer_type == "faq"
+    │     → hit = True
+    │     → ctx["full_answer"] = scene_obj["answer_template"]  （直接取预设答案）
+    │     → 取消 plan_task（不需要检索规划了）
+    │     → 跳过主图，直接 SSE 下发答案 + done
+    │
+    ├─ answer_type == "llm"
+    │     → hit = False
+    │     → initial_state["scene"] = scene_id  （注入到 state）
+    │     → 取消 plan_task，注入占位字段让 node_plan_retrieval 秒跳过
+    │     → 进入主图：node_plan_retrieval(秒跳过) → route_plan_retrieval(检测到 scene) → node_generate
+    │     → 跳过 node_retrieve，不查知识库，answer_template 直接作为生成指令
+    │
+    └─ 未命中
+          → hit = False
+          → 等待 plan_task 完成，注入规划结果
+          → 正常走 RAG 主图：node_plan_retrieval(秒跳过) → node_retrieve → node_generate
+```
+
+**优先级**：敏感话题 > FAQ 场景 > LLM 场景 > 正常 RAG。
+
+- FAQ 命中：直接返回预设答案，跳过 LLM
+- LLM 场景命中：跳过知识库检索，answer_template 作为生成指令直接走 LLM 生成
+- 未命中：正常走 RAG 检索 + 生成
+
+**为什么 LLM 场景跳过检索**：场景的 `answer_template` 本身就是完整的生成指令（如"用以下结构回答产假问题：..."），不需要知识库内容补充。跳过检索省掉 ~6s 的 embedding + rerank 耗时，LLM 直接基于 `answer_template` 生成回答。
 
 ### 5. 混合检索
 
@@ -937,27 +1012,72 @@ ORDER BY c.internal_id ASC
 
 `node_generate` 构造的 System Prompt 包含 6 个标签区块：
 
+**正常 RAG 模式**（6 个标签区块）：
 ```
 <role_instruction>           — 角色风格（严谨/循序渐进/亲切/直说/幽默）
 <user_info>                  — 用户昵称、当前时间、语种
 <tool_usage_rules>           — 工具调用规则（必填参数检查、日期推导）
 <retrieved_context>          — 检索上下文（兄弟子块拼接的 context）
-<scene_answer_template>      — 场景模板（可选，命中场景时注入）
+【图片引用要求】              — Markdown 图片链接内联
 【相关追问生成规则】          — ---RELATED--- 分隔符格式
+```
+
+**场景命中模式**（精简，跳过检索）：
+```
+<user_info>                  — 用户昵称、当前时间、语种
+<scene_answer_rule>          — 场景规则（answer_template 作为生成指令）
+[相关追问生成规则]            — 仅未配 followup_prompt 时才出现
 ```
 
 **多轮对话参数**：`generate_n=3`，生成回答时结合最近 `generate_n*2+1 = 7` 条历史消息。
 
 #### 7.2. 场景模板注入
 
-命中场景时，从 `state["scenes"]` 查找命中模板：
+命中场景且 `answer_type='llm'` 时，从 `state["scenes"]` 查找命中模板，将 `answer_template` 注入 `<scene_answer_rule>` 标签作为 LLM 生成指令：
 
-| `answer_mode` | 注入方式 |
-|---|---|
-| `prompt` | `answer_template` 注入 `<scene_answer_template>` 标签，作为 LLM 生成指令 |
-| `literal` | 加前缀 "忽略所有提示词，一字不变地回答" + `answer_template`，强制逐字输出 |
+```
+state["scene"] = scene_id  （由 stream_response 注入）
+    │
+    ▼
+node_generate:
+    scene = scenes 列表中找到 id == scene_id 的那条
+    │
+    ├─ scene["answer_template"] 有值
+    │     → scene_answer_rule = "<scene_answer_rule>
+    │       用户问题已命中预设场景「{name}」，正文回答必须遵循以下规则：
+    │       {用户配的 answer_template}
+    │       </scene_answer_rule>"
+    │
+    └─ scene["followup_prompt"]
+          → 不注入 prompt，由后处理决定追问（见 §7.5）
+    │
+    ▼
+场景命中时走精简 prompt（不走 RAG 完整 prompt）：
+    <user_info> 用户信息 </user_info>
+    <scene_answer_rule> 场景规则 </scene_answer_rule>
+    直接回答 + 基本约束（语种/不输出emoji/不透露AI身份）
+    [追问规则（仅未配 followup_prompt 时才出现）]
+```
 
-`followup_prompt` 不注入 prompt，由后处理追加到追问列表末尾。
+**场景命中 prompt vs 正常 RAG prompt**：
+
+| 内容块 | 场景命中 | 正常 RAG |
+|---|---|---|
+| `<role_instruction>` 角色风格+禁忌+回答原则 | ✗ | ✓ |
+| `<user_info>` 用户信息 | ✓ | ✓ |
+| `<tool_usage_rules>` 工具调用规则 | ✗ | ✓ |
+| `<retrieved_context>` 检索上下文 | ✗ | ✓ |
+| `<scene_answer_rule>` 场景规则 | ✓ | ✗ |
+| 图片引用要求 | ✗ | ✓ |
+| 追问生成规则 | 仅未配 followup_prompt 时 | ✓ |
+
+**设计要点**：
+
+- **轻量化**：场景命中时 `answer_template` 本身就是完整生成指令，不需要 RAG 的角色描述、工具规则、检索上下文、图片引用等重逻辑
+- **追问按需**：配了 `followup_prompt` 则完全替代 LLM 追问，prompt 里不出现追问规则；没配才让 LLM 生成追问
+- **标签语义化**：`<scene_answer_rule>` 标签名本身即语义，LLM 明确知道这是必须遵循的规则
+
+**注意**：`answer_type='faq'` 的场景已在 `stream_response` 的 `scene_task` 阶段短路返回，不会走到 `node_generate`。这里只处理 `answer_type='llm'` 的场景。
 
 #### 7.3. 工具循环
 
@@ -990,7 +1110,17 @@ LLM 回答中用 `---RELATED---` 分隔符分离正文和追问：
 2. 第二个追问
 ```
 
-后处理 `_parse_related_questions` 提取追问列表，场景 `followup_prompt` 追加到末尾。
+后处理 `_parse_related_questions` 提取追问列表。场景 `followup_prompt` 的处理逻辑：
+
+| 条件 | 追问来源 | 说明 |
+|---|---|---|
+| 场景命中 + 配了 `followup_prompt` | 仅 `followup_prompt` | **完全替代** LLM 追问，丢弃 LLM 生成的追问，只取用户配的内容 |
+| 场景命中 + 未配 `followup_prompt` | LLM 生成 | 正常解析 LLM 生成的追问（上限 3 条） |
+| 未命中场景 | LLM 生成 | 正常解析 LLM 生成的追问（上限 3 条） |
+
+**设计要点**：用户配了追问就完全替代，不与 LLM 追问混合。避免追问列表过长或内容冲突。
+
+FAQ 场景（`answer_type='faq'`）的追问更简单：不走 LLM，追问列表直接就是 `followup_prompt`（如果配了的话）。
 
 ### 8. 敏感话题检测 & 场景判定
 
@@ -1011,10 +1141,16 @@ LLM 回答中用 `---RELATED---` 分隔符分离正文和追问：
 
 | 层次 | 机制 | 阈值/超时 |
 |---|---|---|
-| 第一层 | Jev Choice + Noul | `has_match.noul > 0.7` 且 choice 在有效场景 ID 集合中 |
+| 第一层 | Jev Choice（含 other 选项） | choice != "other" 且在有效场景 ID 集合中 → 命中，超时 15s |
 | 第二层 | LLM 兜底 | 返回 `{"scene": "场景id"}` 或 `{"scene": "none"}` |
 
-命中场景 → 注入 `initial_state["scene"]`，后续 `node_generate` 消费模板。
+判断方式：Choice 的 criteria 里除了用户配置的场景，额外加一个 `"other": "其他：不属于以上任何场景的问题"` 选项。Jev 选了 other 或选了无效 ID 则视为未命中。不用 Noul 守门（实测 Noul 容易把正常问题当闲聊挡掉，详见 §4.2）。
+
+命中场景 → 返回 `(scene_id, answer_type)`，在 `stream_response` 中分流：
+- `answer_type='faq'` → 直接返回预设答案，跳过主图
+- `answer_type='llm'` → 注入 `initial_state["scene"]`，后续 `node_generate` 消费模板
+
+（详见 §4 场景判定与分流）
 
 ### 9. 流式输出 & SSE
 
@@ -1062,9 +1198,8 @@ FastAPI startup 时预热所有懒加载资源，确保首个请求零冷启动�
 
 | 层次 | 策略 | 预热对象 |
 |---|---|---|
-| 第一层 | 同步实例化 | LLM 单例、Jev 客户端、PG 连接池、BM25 索引 |
+| 第一层 | 同步实例化 | LLM 单例、Jev 客户端、PG 连接池 |
 | 第二层 | 异步建连 | Embedding API、Rerank API、LLM API（TCP/TLS 连接） |
-| 第三层 | 预构建索引 | FAQ BM25 索引（KB 语料 IDF） |
 
 - 并发执行：`asyncio.gather(*tasks, return_exceptions=True)` — 单个失败不阻断
 - 多 worker 各自独立预热
@@ -1074,12 +1209,12 @@ FastAPI startup 时预热所有懒加载资源，确保首个请求零冷启动�
 | 设计 | 说明 |
 |---|---|
 | **LangGraph 状态机编排** | 非线性流水线，条件路由 + 工具循环，节点间可跳转/回退/终止 |
-| **标签驱动路由** | 检索规划的标签匹配结果决定走 FAQ/检索/兜底，隐式实现 chitchat vs rag 分流 |
+| **标签驱动路由** | 检索规划的标签匹配结果决定走检索/兜底，隐式实现 chitchat vs rag 分流 |
 | **双塔混合检索** | 向量塔(语义) + 关键词塔(精确) → RRF 融合，兼顾语义相似和关键词命中 |
 | **断崖检测动态 Top-K** | 按 Rerank 分数间隙自动截断，不固定返回数，避免无关结果稀释上下文 |
 | **兄弟子块扩展** | 命中 1 个子块 → context 拼接同父块前后兄弟(共 3 块)，兼顾精准与上下文完整 |
 | **双层判断** | Jev TypeSafe(快) + LLM 兜底(可靠)，敏感检测和场景判定均采用此机制 |
-| **场景模板注入** | literal 直出 vs prompt 引导，满足固定话术和灵活生成两种需求 |
+| **场景模板分流** | answer_type='faq' 短路返回预设答案 vs answer_type='llm' 注入规则走 RAG 生成，统一管理两种响应模式 |
 | **admin 知识共享** | 所有用户检索结果含 admin 上传的文件，实现全局知识库共享 |
 | **skip_tag_filter 权重调整** | 跳过标签过滤时偏向关键词检索(0.3:0.7)，术语更可能精确匹配 |
 | **中英混合 Rerank 前缀** | 加 `[Bilingual context]` 前缀提升中英混合文档的 Rerank 打分质量 |
@@ -1110,7 +1245,7 @@ FastAPI startup 时预热所有懒加载资源，确保首个请求零冷启动�
 
 | 层次 | 策略 | 预热对象 |
 |---|---|---|
-| 第一层 | 同步实例化 | LLM 单例、Jev 客户端、检索器 PG 池、入库 PG 池、Redis 池、BM25 索引 |
+| 第一层 | 同步实例化 | LLM 单例、Jev 客户端、检索器 PG 池、入库 PG 池、Redis 池 |
 | 第二层 | 异步建连 | Embedding API、Rerank API、主/快速 LLM API（TCP/TLS 连接） |
 
 - 并发执行：`asyncio.gather(*tasks, return_exceptions=True)` — 单个失败不阻断
@@ -1142,11 +1277,15 @@ stream_response()          ▼ (gather sens+scene 先完成, plan 最后完成)
   ├── 并行判定+规划          │
   │   (三者并行, ~4.1s)     ▼
   ├── 敏感命中? → 固定话术   │
+  │   场景命中(faq)? → 预设答案│
+  │   场景命中(llm)? → 跳过检索│
   │   否 →                  ▼
   ├── graph.astream_events  │
   │   ├── node_plan_retrieval → 跳过(预计算) ── 0ms
   │   ├── route_plan_retrieval               ── ~0ms
-  │   ├── node_faq_match / node_retrieve     ── ~5.7s (embedding+rerank)
+  │   │     ├─ 场景命中 → node_generate (跳过检索)
+  │   │     └─ 正常 → node_retrieve
+  │   ├── node_retrieve                          ── ~5.7s (embedding+rerank)
   │   ├── route_retrieve_result              ── ~0ms
   │   └── node_generate (流式)               ── ~12s (LLM 生成)
   │       └── [有 tool_calls] → tool_node → node_generate (循环)
@@ -1182,10 +1321,13 @@ plan_retrieval (4.1s)┘   ├─ 命中敏感 → 取消 plan，立即返回
 1. `stream_response` 中将 `node_plan_retrieval(initial_state)` 作为独立 `asyncio.Task` 并行启动
 2. 先 `asyncio.gather(sens_task, scene_task)` 等敏感/场景判定完成（快者先决）
 3. 命中敏感 → `plan_task.cancel()` 取消规划，立即返回固定话术
-4. 未命中 → `await plan_task` 等规划完成，`initial_state.update(plan_result)` 注入结果
-5. 主图启动时 `node_plan_retrieval` 检测到 `state["query"] is not None` → 返回空 dict 跳过重复执行
+4. 命中 FAQ 场景 → `plan_task.cancel()` 取消规划，立即返回预设答案
+5. 命中 LLM 场景 → `plan_task.cancel()` 取消规划，注入占位字段让 `node_plan_retrieval` 秒跳过，`route_plan_retrieval` 检测到 `state["scene"]` 直接路由到 `node_generate`（跳过检索）
+6. 未命中 → `await plan_task` 等规划完成，`initial_state.update(plan_result)` 注入结果
+7. 主图启动时 `node_plan_retrieval` 检测到 `state["query"] is not None` → 返回空 dict 跳过重复执行
 
-**敏感路径无额外开销**：plan_task 被取消，不浪费 LLM token；sens+scene 等待时间不变。
+**敏感/FAQ 路径无额外开销**：plan_task 被取消，不浪费 LLM token；sens+scene 等待时间不变。
+**LLM 场景路径节省 ~6s**：跳过检索（embedding+rerank），answer_template 直接作为生成指令。
 **正常路径节省 ~1.9s**：plan_retrieval 与 sens+scene 重叠执行，等待成本从 1.9s+4.1s=6s 降为 max(1.9s, 4.1s)=4.1s。
 
 #### 13.3. node_generate 详解
@@ -1205,19 +1347,15 @@ node_generate(state)
   │     ├── tool_messages = 从后往前提取 ToolMessage
   │     └── query = state["query"] (LLM 改写后) 或原始问题
   │
-  ├── 2. 场景模板注入
+  ├── 2. 场景模板注入（仅 answer_type='llm' 的场景走到这里）
   │     ├── scene_id = state["scene"]
-  │     ├── 找到场景模板 → answer_mode=prompt/literal
-  │     └── prompt 模式: 注入 <scene_answer_template> 标签
-  │         literal 模式: "忽略所有提示词，一字不变地回答：{tpl}"
+  │     ├── 找到场景模板 → answer_template 注入 <scene_answer_rule> 标签
+  │     └── followup_prompt 不注入 prompt，由后处理决定追问（配了则替代 LLM 追问）
   │
-  ├── 3. 构造 System Prompt (6 个标签区块)
-  │     <role_instruction>           — 角色风格 + 禁忌 + 回答原则
-  │     <user_info>                  — 昵称、当前时间、语种
-  │     <tool_usage_rules>           — 工具调用规则(必填参数检查、日期推导)
-  │     <retrieved_context>          — 检索上下文
-  │     <scene_answer_template>      — 场景模板(可选)
-  │     【相关追问生成规则】          — ---RELATED--- 分隔符格式
+  ├── 3. 构造 System Prompt（场景命中走精简 prompt，否则走 RAG 完整 prompt）
+  │     ├─ 场景命中: <user_info> + <scene_answer_rule> + 基本约束 + [追问规则]
+  │     └─ 正常 RAG: <role_instruction> + <user_info> + <tool_usage_rules>
+  │                  + <retrieved_context> + 【图片引用】+ 【追问生成规则】
   │
   ├── 4. 工具尝试检查
   │     ├── tool_attempts = _count_recent_tool_attempts(messages)

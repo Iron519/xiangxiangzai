@@ -1197,6 +1197,8 @@
     .scene-tag-fuzzy { background: rgba(245,158,11,0.08); color: #b45309; border-color: rgba(245,158,11,0.2); }
     .scene-tag-strict { background: rgba(34,139,34,0.08); color: #2d7a2d; border-color: rgba(34,139,34,0.2); }
     .scene-tag-creative { background: rgba(139,92,246,0.08); color: #6d28d9; border-color: rgba(139,92,246,0.2); }
+    .scene-tag-faq { background: rgba(245,158,11,0.08); color: #b45309; border-color: rgba(245,158,11,0.2); }
+    .scene-tag-llm { background: rgba(99,102,241,0.08); color: #6366f1; border-color: rgba(99,102,241,0.2); }
 
     /* ════════════ KNOWLEDGE BASE PAGE (Figma Design) ════════════ */
     .kb-page { padding: 32px 40px; max-width: 1152px; margin: 0 auto; width: 100%; box-sizing: border-box; }
@@ -1499,7 +1501,7 @@
                   </div>
                   <div>
                     <div class="kb-kpi-value-row"><span class="kb-kpi-value" id="kbKpiChunkCount">0</span><span class="kb-kpi-unit">条</span></div>
-                    <p class="kb-kpi-label">切块数目</p>
+                    <p class="kb-kpi-label">切片数目</p>
                   </div>
                 </div>
                 <div class="kb-kpi-card">
@@ -1663,11 +1665,11 @@
                   </div>
                 </div>
                 <div class="sc-header-actions">
-                  <button class="sc-btn" onclick="loadSceneConfigList()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-                    <span>刷新</span>
-                  </button>
-                  <button class="sc-btn sc-btn-primary" id="sceneConfigAddBtn" onclick="openSceneConfigForm()">
+                  <div class="kb-search-box">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                    <input type="text" id="sceneConfigSearchInput" placeholder="搜索场景" oninput="filterSceneConfigList()">
+                  </div>
+                  <button class="kb-upload-btn" id="sceneConfigAddBtn" type="button" title="新建场景" onclick="openSceneConfigForm()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
                     <span>新建场景</span>
                   </button>
@@ -1681,47 +1683,47 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/><path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/></svg>
                   </div>
                   <div>
-                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiTotal">0</span><span class="sc-kpi-unit">条</span></div>
+                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiTotal">0</span><span class="sc-kpi-unit">/50</span></div>
                     <p class="sc-kpi-label">场景总数</p>
                   </div>
                 </div>
                 <div class="sc-kpi-card">
-                  <div class="sc-kpi-icon-box" style="background:rgba(var(--c-brand-rgb),0.1);color:var(--c-brand)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                  <div class="sc-kpi-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
                   </div>
                   <div>
-                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiExact">0</span><span class="sc-kpi-unit">条</span></div>
-                    <p class="sc-kpi-label">精准匹配</p>
+                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiFaq">0</span><span class="sc-kpi-unit">条</span></div>
+                    <p class="sc-kpi-label">原文作答</p>
                   </div>
                 </div>
                 <div class="sc-kpi-card">
-                  <div class="sc-kpi-icon-box" style="background:rgba(245,158,11,0.1);color:#b45309">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                  <div class="sc-kpi-icon-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/></svg>
                   </div>
                   <div>
-                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiFuzzy">0</span><span class="sc-kpi-unit">条</span></div>
-                    <p class="sc-kpi-label">模糊匹配</p>
+                    <div class="sc-kpi-value-row"><span class="sc-kpi-value" id="scKpiLlm">0</span><span class="sc-kpi-unit">条</span></div>
+                    <p class="sc-kpi-label">模型生成</p>
                   </div>
                 </div>
+              </div>
+
+              <!-- 批量操作栏 -->
+              <div id="sceneConfigBatchBar" style="display:none;margin-bottom:8px;padding:8px 14px;align-items:center;gap:16px;flex-wrap:wrap">
+                <span id="sceneConfigBatchCount" style="font-size:13px;color:var(--c-text-2);margin-right:auto"></span>
+                <button class="btn-delete small-btn" onclick="deleteSelectedSceneConfig()">删除所选</button>
+                <button class="btn-secondary small-btn" onclick="clearSceneConfigSelection()">取消</button>
               </div>
 
               <!-- 列表卡片 -->
               <div id="sceneConfigLoading" class="sc-loading">加载中...</div>
               <div id="sceneConfigTableWrap" style="display:none">
-                <div class="sc-list-card">
-                  <div class="sc-list-header">
-                    <div>
-                      <h2>场景列表</h2>
-                      <p>场景-响应配置集，支持精准/模糊匹配与严格/发散响应</p>
-                    </div>
-                  </div>
+                <div class="kb-file-list-card">
                   <table class="kb-file-table">
                     <thead><tr>
-                      <th style="width:50px;text-align:center">编号</th>
-                      <th style="min-width:100px">场景名称</th>
-                      <th style="width:90px;text-align:center">匹配模式</th>
+                      <th style="width:36px;text-align:center"><input type="checkbox" id="sceneConfigSelectAll" onchange="toggleSelectAllSceneConfig(this.checked)" title="全选"></th>
+                      <th style="width:90px">标题</th>
+                      <th style="width:22%">触发条件</th>
                       <th style="width:90px;text-align:center">响应模式</th>
-                      <th style="width:25%">场景文本</th>
                       <th>响应内容</th>
                       <th style="width:120px;text-align:center">操作</th>
                     </tr></thead>
@@ -1729,10 +1731,14 @@
                   </table>
                 </div>
               </div>
-              <div id="sceneConfigEmpty" style="display:none" class="sc-empty-state">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><circle cx="17.5" cy="6.5" r="3.5"/><path d="m20 9 2.5 2.5"/></svg>
-                <div class="sc-empty-title">暂无场景配置</div>
-                <div class="sc-empty-desc">点击"新建场景"添加场景-响应规则</div>
+              <div id="sceneConfigEmpty" style="display:none">
+                <div class="kb-file-list-card">
+                  <div class="kb-empty-state">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><circle cx="17.5" cy="6.5" r="3.5"/><path d="m20 9 2.5 2.5"/></svg>
+                    <div class="kb-empty-state-title">暂无场景配置</div>
+                    <div class="kb-empty-state-desc">点击"新建场景"添加场景-响应规则</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -1745,41 +1751,36 @@
             <div class="modal-body" style="max-height:64vh;overflow-y:auto">
               <!-- 场景名称 -->
               <div style="margin-bottom:16px">
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">场景名称 <span style="color:var(--c-rose)">*</span></label>
-                <span style="display:block;font-size:var(--fs-xs);font-style:italic;color:var(--c-text-3);margin-bottom:6px">标识此场景的简短名称</span>
-                <input id="scInputName" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="如：产假咨询、考勤异常申报">
-              </div>
-
-              <!-- 匹配模式 -->
-              <div style="margin-bottom:16px">
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:6px">匹配模式</label>
-                <div class="seg-toggle" id="scMatchModeToggle" data-value="exact" style="margin-bottom:6px">
-                  <button class="seg-btn active" data-val="exact">精准匹配</button>
-                  <button class="seg-btn" data-val="fuzzy">模糊匹配</button>
-                </div>
-                <span id="scMatchModeHint" style="display:block;font-size:var(--fs-xs);color:var(--c-text-3);font-style:italic">提问与本场景文本几乎完全相同时触发</span>
-              </div>
-
-              <!-- 场景文本 -->
-              <div style="margin-bottom:16px">
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">场景文本 <span style="color:var(--c-rose)">*</span></label>
-                <textarea id="scInputMatchText" rows="3" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入需要精确匹配的提问文本"></textarea>
+                <label class="modal-field-label" style="margin:0 0 6px">场景名称</label>
+                <input id="scInputName" maxlength="7" style="width:100%;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="如：产品介绍">
               </div>
 
               <!-- 响应模式 -->
               <div style="margin-bottom:16px">
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:6px">响应模式</label>
-                <div class="seg-toggle" id="scResponseModeToggle" data-value="strict" style="margin-bottom:6px">
-                  <button class="seg-btn active" data-val="strict">严格响应</button>
-                  <button class="seg-btn" data-val="creative">发散响应</button>
+                <label class="modal-field-label" style="margin:0 0 6px">响应模式</label>
+                <div class="seg-toggle" id="scAnswerTypeToggle" data-value="llm" style="margin-bottom:6px">
+                  <button class="seg-btn active" data-val="llm">模型生成</button>
+                  <button class="seg-btn" data-val="faq">原文作答</button>
                 </div>
-                <span id="scResponseModeHint" style="display:block;font-size:var(--fs-xs);color:var(--c-text-3);font-style:italic">按照预设文本一字不差地返回</span>
+                <span id="scAnswerTypeHint" style="display:block;font-size:var(--fs-xs);color:var(--c-text-3)">该模式下，响应内容将作为生成指令注入大模型</span>
+              </div>
+
+              <!-- 场景文本 -->
+              <div style="margin-bottom:16px">
+                <label class="modal-field-label" style="margin:0 0 6px">场景文本 <span class="help-badge" data-tip="描述用户的提问情形">?</span></label>
+                <textarea id="scInputMatchText" rows="3" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="如：用户询问该产品具有哪些功能和亮点"></textarea>
               </div>
 
               <!-- 响应内容 -->
+              <div style="margin-bottom:16px">
+                <label class="modal-field-label" style="margin:0 0 6px">响应内容</label>
+                <textarea id="scInputResponseText" rows="5" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入响应模式/指令，如：回答分三部分：1.政策规定 2.申请材料 3.申请流程"></textarea>
+              </div>
+
+              <!-- 追问提示 -->
               <div>
-                <label style="display:block;font-weight:600;font-size:var(--fs-s);color:var(--c-text-1);margin-bottom:2px">响应内容 <span style="color:var(--c-rose)">*</span></label>
-                <textarea id="scInputResponseText" rows="5" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="输入固定回答内容，将一字不差地返回给用户"></textarea>
+                <label class="modal-field-label" style="margin:0 0 6px">追问提示 <span class="help-badge" data-tip="选填，追问便于用户继续探索，构建逐步深入的了解路径">?</span></label>
+                <textarea id="scInputFollowup" rows="2" style="width:100%;resize:vertical;padding:8px 12px;border:1px solid var(--c-border);border-radius:8px;font-size:var(--fs-s);font-family:inherit" placeholder="填写内容的原文将添加为追问，如：那我该如何开通会员呢？"></textarea>
               </div>
             </div>
             <div class="modal-footer">
@@ -3918,8 +3919,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     if (!tg) return;
     _setSegToggle(tg.id, btn.dataset.val);
     // 场景配置弹窗的动态提示
-    if (tg.id === 'scMatchModeToggle') updateMatchModeHint();
-    if (tg.id === 'scResponseModeToggle') updateResponseModeHint();
+    if (tg.id === 'scAnswerTypeToggle') updateAnswerTypeHint();
   });
 
   async function loadSceneList() {
@@ -3928,7 +3928,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const empty = document.getElementById('sceneEmpty');
     const addBtn = document.getElementById('sceneAddBtn');
     loading.style.display = ''; wrap.style.display = 'none'; empty.style.display = 'none';
-    addBtn.style.display = hasPermission('faq:save') ? '' : 'none';
+    addBtn.style.display = hasPermission('scene:save') ? '' : 'none';
     try {
       const res = await apiFetch('/api/v1/scene-templates');
       const data = await res.json();
@@ -3944,8 +3944,8 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
 
   function renderSceneTable() {
     const tbody = document.getElementById('sceneTbody');
-    const canSave = hasPermission('faq:save');
-    const canDelete = hasPermission('faq:delete');
+    const canSave = hasPermission('scene:save');
+    const canDelete = hasPermission('scene:delete');
     const sorted = [..._sceneList].sort((a, b) => a.id - b.id);
     const cellStyle = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0';
     tbody.innerHTML = sorted.map(s => {
@@ -3979,7 +3979,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       document.getElementById('sceneInputTrigger').value = s.trigger || '';
       document.getElementById('sceneInputAnswerTemplate').value = s.answer_template || '';
       document.getElementById('sceneInputFollowup').value = s.followup_prompt || '';
-      _setSegToggle('sceneAnswerModeToggle', s.answer_mode || 'prompt');
+      _setSegToggle('sceneAnswerModeToggle', (s.answer_type === 'faq') ? 'literal' : 'prompt');
     } else {
       _editingSceneKey = null;
       title.textContent = '新建场景模板';
@@ -4013,8 +4013,8 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       scene_id,
       name,
       trigger: document.getElementById('sceneInputTrigger').value.trim(),
+      answer_type: _getSegToggle('sceneAnswerModeToggle') === 'literal' ? 'faq' : 'llm',
       answer_template: document.getElementById('sceneInputAnswerTemplate').value.trim(),
-      answer_mode: _getSegToggle('sceneAnswerModeToggle'),
       followup_prompt: document.getElementById('sceneInputFollowup').value.trim(),
     };
     const isEdit = _editingSceneKey !== null;
@@ -4052,14 +4052,12 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
   // ==================== 场景配置 (场景-响应集) ====================
   let _sceneConfigList = [];
   let _editingSceneConfigId = null;
+  const _selectedSceneConfig = new Set();
+  let _sceneConfigSearchQuery = '';
 
-  const _matchModeHints = {
-    exact: '提问与本场景文本几乎完全相同时触发',
-    fuzzy: '提问可归为场景所代表的情形时触发',
-  };
-  const _responseModeHints = {
-    strict: '按照预设文本一字不差地返回',
-    creative: '按照设定的模式进行生成和响应',
+  const _answerTypeHints = {
+    llm: '下方响应内容将作为生成指令注入大模型',
+    faq: '下方响应内容将以原文回复用户，跳过大模型生成',
   };
 
   async function loadSceneConfigList() {
@@ -4068,7 +4066,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const empty = document.getElementById('sceneConfigEmpty');
     const addBtn = document.getElementById('sceneConfigAddBtn');
     loading.style.display = ''; wrap.style.display = 'none'; empty.style.display = 'none';
-    addBtn.style.display = hasPermission('faq:save') ? '' : 'none';
+    addBtn.style.display = hasPermission('scene:save') ? '' : 'none';
     try {
       const res = await apiFetch('/api/v1/scene-templates');
       const data = await res.json();
@@ -4085,77 +4083,138 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
 
   function updateSceneConfigKpi() {
     const total = _sceneConfigList.length;
-    const exact = _sceneConfigList.filter(s => (s.match_mode || 'exact') === 'exact').length;
-    const fuzzy = _sceneConfigList.filter(s => s.match_mode === 'fuzzy').length;
+    const faqCount = _sceneConfigList.filter(s => s.answer_type === 'faq').length;
+    const llmCount = _sceneConfigList.filter(s => (s.answer_type || 'llm') === 'llm').length;
     const elTotal = document.getElementById('scKpiTotal');
-    const elExact = document.getElementById('scKpiExact');
-    const elFuzzy = document.getElementById('scKpiFuzzy');
+    const elFaq = document.getElementById('scKpiFaq');
+    const elLlm = document.getElementById('scKpiLlm');
     const elUpdated = document.getElementById('sceneConfigLastUpdated');
     if (elTotal) elTotal.textContent = total;
-    if (elExact) elExact.textContent = exact;
-    if (elFuzzy) elFuzzy.textContent = fuzzy;
+    if (elFaq) elFaq.textContent = faqCount;
+    if (elLlm) elLlm.textContent = llmCount;
     if (elUpdated) elUpdated.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
   }
 
-  function _matchModeTag(mode) {
-    if (mode === 'fuzzy') return '<span class="scene-tag scene-tag-fuzzy">模糊匹配</span>';
-    return '<span class="scene-tag scene-tag-exact">精准匹配</span>';
-  }
-  function _responseModeTag(mode) {
-    if (mode === 'creative') return '<span class="scene-tag scene-tag-creative">发散响应</span>';
-    return '<span class="scene-tag scene-tag-strict">严格响应</span>';
+  function _answerTypeTag(type) {
+    if (type === 'faq') return '<span class="scene-tag scene-tag-faq">原文作答</span>';
+    return '<span class="scene-tag scene-tag-llm">模型生成</span>';
   }
 
   function renderSceneConfigTable() {
     const tbody = document.getElementById('sceneConfigTbody');
-    const canSave = hasPermission('faq:save');
-    const canDelete = hasPermission('faq:delete');
-    const sorted = [..._sceneConfigList].sort((a, b) => (a.id || 0) - (b.id || 0));
+    const canSave = hasPermission('scene:save');
+    const canDelete = hasPermission('scene:delete');
+    const filtered = _sceneConfigSearchQuery
+      ? _sceneConfigList.filter(s => (s.name || s.scene_id || '').toLowerCase().includes(_sceneConfigSearchQuery))
+      : _sceneConfigList;
+    const sorted = [...filtered].sort((a, b) => (a.id || 0) - (b.id || 0));
     const cellStyle = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:0';
     tbody.innerHTML = sorted.map(s => {
-      const matchMode = s.match_mode || 'exact';
-      const responseMode = s.response_mode || (s.answer_mode === 'literal' ? 'strict' : 'creative');
-      const matchText = s.trigger || s.match_text || '';
-      const responseText = s.answer_template || s.response_text || '';
-      const mt = matchText.length > 40 ? matchText.slice(0, 40) + '…' : matchText;
+      const answerType = s.answer_type || 'llm';
+      const triggerText = s.trigger || '';
+      const responseText = s.answer_template || '';
+      const tt = triggerText.length > 40 ? triggerText.slice(0, 40) + '…' : triggerText;
       const rt = responseText.length > 80 ? responseText.slice(0, 80) + '…' : responseText;
       const safeName = escapeHtml(s.name || s.scene_id || '');
+      const safeId = (s.scene_id || '').replace(/'/g, "\\'");
+      const checked = _selectedSceneConfig.has(s.scene_id) ? 'checked' : '';
       return `<tr>
-        <td style="text-align:center">${s.id || '—'}</td>
+        <td style="text-align:center" onclick="event.stopPropagation()"><input type="checkbox" ${checked} onchange="toggleSceneConfigSelect('${safeId}', this.checked)"></td>
         <td style="white-space:nowrap;font-weight:500">${safeName}</td>
-        <td style="text-align:center">${_matchModeTag(matchMode)}</td>
-        <td style="text-align:center">${_responseModeTag(responseMode)}</td>
-        <td style="${cellStyle};color:var(--c-text-2)">${escapeHtml(mt) || '—'}</td>
+        <td style="${cellStyle};color:var(--c-text-2)">${escapeHtml(tt) || '—'}</td>
+        <td style="text-align:center">${_answerTypeTag(answerType)}</td>
         <td style="${cellStyle};color:var(--c-text-3);font-size:var(--fs-xs)">${escapeHtml(rt) || '—'}</td>
-        <td style="text-align:center;white-space:nowrap">
-          ${canSave ? `<button class="btn-secondary small-btn" style="font-size:var(--fs-xs);padding:4px 10px" onclick="openSceneConfigForm('${(s.scene_id||'').replace(/'/g, "\\'")}')">编辑</button>` : ''}
-          ${canDelete ? `<button class="btn-delete-red small-btn" style="font-size:var(--fs-xs);padding:4px 10px;margin-left:4px" onclick="confirmDeleteSceneConfig('${(s.scene_id||'').replace(/'/g, "\\'")}', '${safeName}')">删除</button>` : ''}
+        <td style="text-align:center;white-space:nowrap" onclick="event.stopPropagation()">
+          ${canSave ? `<button class="kb-action-btn" onclick="openSceneConfigForm('${safeId}')" title="编辑">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </button>` : ''}
+          ${canDelete ? `<button class="kb-action-btn kb-action-danger" onclick="confirmDeleteSceneConfig('${safeId}', '${safeName}')" title="删除">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+          </button>` : ''}
         </td>
       </tr>`;
     }).join('');
-  }
-
-  function updateMatchModeHint() {
-    const mode = _getSegToggle('scMatchModeToggle');
-    const hint = document.getElementById('scMatchModeHint');
-    const ta = document.getElementById('scInputMatchText');
-    if (hint) hint.textContent = _matchModeHints[mode] || '';
-    if (ta) {
-      ta.placeholder = mode === 'fuzzy'
-        ? '描述场景情形，如：用户询问产假、陪产假、生育津贴等相关问题'
-        : '输入需要精确匹配的提问文本，如：公司产假多少天？';
+    // 更新全选框状态
+    const allCb = document.getElementById('sceneConfigSelectAll');
+    if (allCb) {
+      const allIds = _sceneConfigList.map(s => s.scene_id).filter(Boolean);
+      allCb.checked = allIds.length > 0 && allIds.every(id => _selectedSceneConfig.has(id));
     }
   }
 
-  function updateResponseModeHint() {
-    const mode = _getSegToggle('scResponseModeToggle');
-    const hint = document.getElementById('scResponseModeHint');
-    const ta = document.getElementById('scInputResponseText');
-    if (hint) hint.textContent = _responseModeHints[mode] || '';
-    if (ta) {
-      ta.placeholder = mode === 'creative'
-        ? '输入响应模式/指令，如：回答分三部分：1.政策规定 2.申请材料 3.申请流程'
-        : '输入固定回答内容，将一字不差地返回给用户';
+  function toggleSceneConfigSelect(sceneId, checked) {
+    if (checked) _selectedSceneConfig.add(sceneId); else _selectedSceneConfig.delete(sceneId);
+    const allCb = document.getElementById('sceneConfigSelectAll');
+    if (allCb) {
+      const allIds = _sceneConfigList.map(s => s.scene_id).filter(Boolean);
+      allCb.checked = allIds.length > 0 && allIds.every(id => _selectedSceneConfig.has(id));
+    }
+    updateSceneConfigBatchBar();
+  }
+
+  function toggleSelectAllSceneConfig(checked) {
+    if (checked) {
+      _sceneConfigList.forEach(s => { if (s.scene_id) _selectedSceneConfig.add(s.scene_id); });
+    } else {
+      _selectedSceneConfig.clear();
+    }
+    renderSceneConfigTable();
+    updateSceneConfigBatchBar();
+  }
+
+  function filterSceneConfigList() {
+    const input = document.getElementById('sceneConfigSearchInput');
+    _sceneConfigSearchQuery = (input?.value || '').trim().toLowerCase();
+    renderSceneConfigTable();
+  }
+
+  // 批量工具栏显示/隐藏
+  function updateSceneConfigBatchBar() {
+    const bar = document.getElementById('sceneConfigBatchBar');
+    const cnt = document.getElementById('sceneConfigBatchCount');
+    if (_selectedSceneConfig.size > 0) {
+      bar.style.display = 'flex';
+      cnt.textContent = `已选 ${_selectedSceneConfig.size} 项`;
+    } else {
+      bar.style.display = 'none';
+    }
+  }
+
+  function clearSceneConfigSelection() {
+    _selectedSceneConfig.clear();
+    renderSceneConfigTable();
+    updateSceneConfigBatchBar();
+    const allCb = document.getElementById('sceneConfigSelectAll');
+    if (allCb) allCb.checked = false;
+  }
+
+  // 批量删除：逐个调 DELETE
+  async function deleteSelectedSceneConfig() {
+    const keys = Array.from(_selectedSceneConfig);
+    if (!keys.length) return;
+    if (!await showConfirm('删除场景', `删除选中的 ${keys.length} 个场景？`, '这将立即禁用所选场景。', '删除')) return;
+    let ok = 0, fail = 0;
+    for (const sceneKey of keys) {
+      try {
+        const res = await apiFetch(`/api/v1/scene-templates/${encodeURIComponent(sceneKey)}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.code === 200) ok++; else fail++;
+      } catch (e) { fail++; }
+    }
+    _selectedSceneConfig.clear();
+    await loadSceneConfigList();
+    if (fail > 0) await showAlert('部分失败', `${ok} 个已删除，${fail} 个失败。`);
+  }
+
+  function updateAnswerTypeHint() {
+    const type = _getSegToggle('scAnswerTypeToggle');
+    const hint = document.getElementById('scAnswerTypeHint');
+    const rt = document.getElementById('scInputResponseText');
+    if (hint) hint.textContent = _answerTypeHints[type] || '';
+    if (rt) {
+      rt.placeholder = type === 'faq'
+        ? '输入固定的回答内容，将一字不差地回复用户'
+        : '输入回答的模式或结构，如：分三部分介绍产品：1.适用场景 2.核心功能 3.设计亮点';
     }
   }
 
@@ -4167,21 +4226,20 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
       const s = _sceneConfigList.find(x => x.scene_id === sceneKey) || {};
       title.textContent = '编辑场景';
       document.getElementById('scInputName').value = s.name || '';
-      _setSegToggle('scMatchModeToggle', s.match_mode || 'exact');
-      document.getElementById('scInputMatchText').value = s.trigger || s.match_text || '';
-      _setSegToggle('scResponseModeToggle', s.response_mode || (s.answer_mode === 'literal' ? 'strict' : 'creative'));
-      document.getElementById('scInputResponseText').value = s.answer_template || s.response_text || '';
+      _setSegToggle('scAnswerTypeToggle', s.answer_type || 'llm');
+      document.getElementById('scInputMatchText').value = s.trigger || '';
+      document.getElementById('scInputResponseText').value = s.answer_template || '';
+      document.getElementById('scInputFollowup').value = s.followup_prompt || '';
     } else {
       _editingSceneConfigId = null;
       title.textContent = '新建场景';
       document.getElementById('scInputName').value = '';
-      _setSegToggle('scMatchModeToggle', 'exact');
+      _setSegToggle('scAnswerTypeToggle', 'llm');
       document.getElementById('scInputMatchText').value = '';
-      _setSegToggle('scResponseModeToggle', 'strict');
       document.getElementById('scInputResponseText').value = '';
+      document.getElementById('scInputFollowup').value = '';
     }
-    updateMatchModeHint();
-    updateResponseModeHint();
+    updateAnswerTypeHint();
     mask.style.display = 'flex';
   }
 
@@ -4194,31 +4252,43 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
     const nameEl = document.getElementById('scInputName');
     const mtEl = document.getElementById('scInputMatchText');
     const rtEl = document.getElementById('scInputResponseText');
+    const fuEl = document.getElementById('scInputFollowup');
     const name = nameEl.value.trim();
     const matchText = mtEl.value.trim();
     const responseText = rtEl.value.trim();
-    const matchMode = _getSegToggle('scMatchModeToggle');
-    const responseMode = _getSegToggle('scResponseModeToggle');
+    const followupText = fuEl.value.trim();
+    const answerType = _getSegToggle('scAnswerTypeToggle');
     nameEl.style.borderColor = ''; mtEl.style.borderColor = ''; rtEl.style.borderColor = '';
     let missing = [];
     if (!name) { nameEl.style.borderColor = 'var(--c-rose)'; missing.push('场景名称'); }
+    if (name && name.length > 7) { nameEl.style.borderColor = 'var(--c-rose)'; await showAlert('字数超限', '场景名称限制在7字以内'); return; }
     if (!matchText) { mtEl.style.borderColor = 'var(--c-rose)'; missing.push('场景文本'); }
     if (!responseText) { rtEl.style.borderColor = 'var(--c-rose)'; missing.push('响应内容'); }
     if (missing.length) { await showAlert('必填', `${missing.join('、')}为必填项`); return; }
     const isEdit = _editingSceneConfigId !== null;
+    // 新建时检查 50 条上限
+    if (!isEdit && _sceneConfigList.length >= 50) {
+      await showAlert('上限', '场景数量已达上限（50条），请先删除不需要的场景');
+      return;
+    }
+    const newSceneId = name.replace(/\s+/g, '_').toLowerCase();
+    // scene_id 去重校验（新建时检查，编辑时如果 scene_id 变了也检查）
+    if (!isEdit || newSceneId !== _editingSceneConfigId) {
+      const exists = _sceneConfigList.some(s => s.scene_id === newSceneId);
+      if (exists) { await showAlert('重复', `场景标识 "${newSceneId}" 已存在，请修改场景名称`); return; }
+    }
     const payload = {
+      scene_id: newSceneId,
       name,
-      match_mode: matchMode,
-      response_mode: responseMode,
+      answer_type: answerType,
       trigger: matchText,
       answer_template: responseText,
-      answer_mode: responseMode === 'strict' ? 'literal' : 'prompt',
+      followup_prompt: followupText,
     };
     const url = isEdit
       ? `/api/v1/scene-templates/${encodeURIComponent(_editingSceneConfigId)}`
       : '/api/v1/scene-templates';
     const method = isEdit ? 'PUT' : 'POST';
-    if (!isEdit) payload.scene_id = name.replace(/\s+/g, '_').toLowerCase();
     try {
       const res = await apiFetch(url, {
         method, headers: {'Content-Type': 'application/json'},
@@ -4241,6 +4311,7 @@ function scrollToBottom() { chatMessages.scrollTop = chatMessages.scrollHeight; 
         const res = await apiFetch(`/api/v1/scene-templates/${encodeURIComponent(sceneKey)}`, { method: 'DELETE' });
         const data = await res.json();
         if (data.code !== 200) throw new Error(data.message || '删除失败');
+        _selectedSceneConfig.delete(sceneKey);
         await loadSceneConfigList();
       } catch (e) {
         await showAlert('错误', e.message);

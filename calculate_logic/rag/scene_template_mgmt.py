@@ -58,14 +58,15 @@ SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
 # ================= Pydantic 模型 =================
 class SceneTemplateCreate(BaseModel):
-    """新增/修改场景模板入参。answer_template / followup_prompt 均为选填，空串表示不注入。
-    answer_mode: 'prompt'(默认，作为生成指令) 或 'literal'(一字不变输出原文)。"""
+    """新增/修改场景模板入参。
+    answer_type: 'llm'(默认，注入answer_template作为生成指令走RAG) 或 'faq'(直接返回answer_template，跳过LLM)。
+    answer_template: answer_type='faq' 时为固定答案；answer_type='llm' 时为注入规则。
+    followup_prompt: 可选，命中场景后追加的追问提示。"""
     scene_id: str
     name: str
     trigger: str = ""
+    answer_type: str = "llm"
     answer_template: str = ""
-    answer_mode: str = "prompt"
-    followup_prompt: str = ""
     followup_prompt: str = ""
 
 
@@ -102,7 +103,7 @@ async def list_scene_templates(_: TokenData = Depends(get_current_user)):
     """查询全部场景模板（按 id 正序）。"""
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
-            f"SELECT id, scene_id, name, trigger, answer_template, answer_mode, followup_prompt, created_at, updated_at "
+            f"SELECT id, scene_id, name, trigger, answer_type, answer_template, followup_prompt, created_at, updated_at "
             f"FROM {SCENE_TABLE} ORDER BY id ASC"
         )
         rows = cur.fetchall()
@@ -112,8 +113,8 @@ async def list_scene_templates(_: TokenData = Depends(get_current_user)):
             "scene_id": r["scene_id"],
             "name": r["name"],
             "trigger": r["trigger"],
+            "answer_type": r["answer_type"],
             "answer_template": r["answer_template"],
-            "answer_mode": r["answer_mode"],
             "followup_prompt": r["followup_prompt"],
             "created_at": r["created_at"].isoformat() if isinstance(r.get("created_at"), datetime) else r.get("created_at"),
             "updated_at": r["updated_at"].isoformat() if isinstance(r.get("updated_at"), datetime) else r.get("updated_at"),
@@ -124,12 +125,22 @@ async def list_scene_templates(_: TokenData = Depends(get_current_user)):
 
 @router.post("", response_model=Response)
 async def create_scene_template(body: SceneTemplateCreate, current_user: TokenData = Depends(get_current_user)):
-    """新增单条场景模板。"""
+    """新增单条场景模板。上限 50 条。"""
     sid = body.scene_id.strip()
     name = body.name.strip()
     if not sid or not name:
         return Response.fail(code=400, message="scene_id 和 name 不能为空")
+    answer_type = body.answer_type.strip() or "llm"
+    if answer_type not in ("llm", "faq"):
+        return Response.fail(code=400, message="answer_type 只能是 'llm' 或 'faq'")
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        # 50 条上限校验
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM {SCENE_TABLE}")
+        cnt = cur.fetchone()["cnt"]
+        if cnt >= 50:
+            conn.commit()
+            return Response.fail(code=400, message="场景数量已达上限（50条），请先删除不需要的场景")
+        # scene_id 去重校验
         cur.execute(
             f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (sid,),
         )
@@ -137,15 +148,15 @@ async def create_scene_template(body: SceneTemplateCreate, current_user: TokenDa
             conn.commit()
             return Response.fail(code=400, message=f"场景 {sid} 已存在")
         cur.execute(
-            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_template, answer_mode, followup_prompt) "
+            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
             f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (sid, name, body.trigger.strip(), body.answer_template.strip(), body.answer_mode.strip() or 'prompt',
+            (sid, name, body.trigger.strip(), answer_type, body.answer_template.strip(),
              body.followup_prompt.strip()),
         )
         new_id = cur.fetchone()["id"]
         conn.commit()
 
-    logger.info(f"[SceneCreate] uid={current_user.uid} 新增场景 id={new_id} scene_id='{sid}'")
+    logger.info(f"[SceneCreate] uid={current_user.uid} 新增场景 id={new_id} scene_id='{sid}' type={answer_type}")
     return Response.ok(data=new_id)
 
 
@@ -156,20 +167,29 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
     name = body.name.strip()
     if not sid or not name:
         return Response.fail(code=400, message="scene_id 和 name 不能为空")
+    answer_type = body.answer_type.strip() or "llm"
+    if answer_type not in ("llm", "faq"):
+        return Response.fail(code=400, message="answer_type 只能是 'llm' 或 'faq'")
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
         if not cur.fetchone():
             conn.commit()
             return Response.fail(code=404, message=f"场景 {scene_id} 不存在")
+        # scene_id 改了的话检查新 scene_id 是否冲突
+        if sid != scene_id:
+            cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s AND scene_id != %s", (sid, scene_id))
+            if cur.fetchone():
+                conn.commit()
+                return Response.fail(code=400, message=f"场景 {sid} 已存在")
         cur.execute(
-            f"UPDATE {SCENE_TABLE} SET scene_id=%s, name=%s, trigger=%s, answer_template=%s, answer_mode=%s, followup_prompt=%s, updated_at=NOW() "
+            f"UPDATE {SCENE_TABLE} SET scene_id=%s, name=%s, trigger=%s, answer_type=%s, answer_template=%s, followup_prompt=%s, updated_at=NOW() "
             f"WHERE scene_id=%s",
-            (sid, name, body.trigger.strip(), body.answer_template.strip(), body.answer_mode.strip() or 'prompt',
+            (sid, name, body.trigger.strip(), answer_type, body.answer_template.strip(),
              body.followup_prompt.strip(), scene_id),
         )
         conn.commit()
 
-    logger.info(f"[SceneUpdate] uid={current_user.uid} 修改场景 scene_id='{scene_id}'")
+    logger.info(f"[SceneUpdate] uid={current_user.uid} 修改场景 scene_id='{scene_id}' type={answer_type}")
     return Response.ok(data=scene_id)
 
 

@@ -3,8 +3,6 @@ import os
 import json
 import re
 import asyncio
-import jieba
-from rank_bm25 import BM25Plus
 from pathlib import Path
 from datetime import datetime, timezone
 from fastapi import APIRouter, Body, Depends
@@ -29,7 +27,7 @@ from table_data.token_usage import log_token_usage, init_accumulator, get_accumu
 # ================= 环境配置参数 =================
 load_dotenv(find_dotenv())
 
-REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "FAST_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_SESSIONS_TABLE", "PG_MYAGENT_KB_TABLE", "PG_MYAGENT_FAQ_TABLE", "FAQ_COVERAGE_THRESHOLD", "FAQ_RATIO_THRESHOLD"]
+REQUIRED_ENV_VARS = ["WORK_PATH", "ACCESSCODE", "BASE_URL", "TEXT_MODEL", "FAST_MODEL", "PG_HOST", "PG_PORT", "PG_DATABASE", "PG_USER", "PG_PASSWORD", "PG_MYAGENT_CONVERSATIONS_TABLE", "PG_MYAGENT_SESSIONS_TABLE", "PG_MYAGENT_KB_TABLE"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 # 安全 fallback：spawn 模式下 load_dotenv 可能未生效
@@ -160,7 +158,6 @@ _DEFAULT_TOOL_QUERY_HINTS = {
 _DEFAULT_NODE_HINTS = {
     "node_plan_retrieval": "正在规划检索策略",
     "node_retrieve": "正在检索知识库",
-    "node_faq_match": "正在匹配常见问题",
     "node_generate": "正在生成回答",
     "tool_node": "正在调用工具",
 }
@@ -287,9 +284,9 @@ def _clean_history_messages(history_messages: list[BaseMessage]) -> list[str]:
 
 # ================= 检索策略规划（指代消解 + 标签匹配 + 检索参数决策，图入口节点） =================
 async def node_plan_retrieval(state: ChatState) -> ChatState:
-    # 并行优化：stream_response 已预计算并注入规划结果时，跳过重复执行
+    # 并行优化：stream_response 已在并行阶段完成检索规划并注入结果，此处跳过重复执行
     if state.get("query") is not None and state.get("file_descriptions") is not None:
-        logger.info(f"[PlanRetrieval] 检测到预计算结果，跳过重复规划")
+        logger.debug(f"[PlanRetrieval] 检索规划已在并行阶段完成，跳过重复执行")
         return {}
 
     last_message = state["messages"][-1].content if state.get("messages") else ""
@@ -396,20 +393,25 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
                 "target_tags": [], "skip_tag_filter": False, "file_descriptions": file_descriptions}
 
 
-def route_plan_retrieval(state: ChatState) -> Literal["node_faq_match", "node_no_kb_hit", "node_retrieve"]:
+def route_plan_retrieval(state: ChatState) -> Literal["node_no_kb_hit", "node_retrieve", "node_generate"]:
     """检索规划条件边：
+    - 场景命中（answer_type='llm'）→ 直接生成，跳过检索
     - file_descriptions 为空 → 知识库无文件，走未命中兜底
     - target_tags 为空 + skip_tag_filter=True → 术语/专用名词未匹配标签，跳过标签过滤走全局检索
     - target_tags 为空 + skip_tag_filter=False → 问题与知识库无关，走未命中兜底
-    - target_tags 非空 → 先走 FAQ 匹配
+    - target_tags 非空 → 直接走检索
     """
+    # 场景命中时跳过检索，直接生成（answer_template 本身就是生成指令，不需要知识库）
+    if state.get("scene"):
+        logger.info(f"[RoutePlan] 场景命中({state['scene']})，跳过检索直接生成")
+        return "node_generate"
     file_descriptions = state.get("file_descriptions", [])
     if not file_descriptions:
         logger.info("[RoutePlan] 知识库无文件，走未命中兜底")
         return "node_no_kb_hit"
     target_tags = state.get("target_tags", [])
     if target_tags:
-        return "node_faq_match"
+        return "node_retrieve"
     skip_tag_filter = state.get("skip_tag_filter", False)
     if skip_tag_filter:
         logger.info("[RoutePlan] target_tags 为空但 skip_tag_filter=True，跳过标签过滤走全局检索")
@@ -508,7 +510,7 @@ def _load_scenes() -> list[dict]:
     try:
         with _get_pg_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
             cur.execute(
-                f"SELECT scene_id, name, trigger, answer_template, answer_mode, followup_prompt "
+                f"SELECT scene_id, name, trigger, answer_type, answer_template, followup_prompt "
                 f"FROM {SCENE_TABLE} ORDER BY id"
             )
             rows = cur.fetchall()
@@ -517,8 +519,8 @@ def _load_scenes() -> list[dict]:
                 "id": r["scene_id"],
                 "name": r["name"],
                 "trigger": r["trigger"] or "",
+                "answer_type": r["answer_type"] or "llm",
                 "answer_template": r["answer_template"] or "",
-                "answer_mode": r["answer_mode"] or "prompt",
                 "followup_prompt": r["followup_prompt"] or "",
             }
             for r in rows
@@ -530,21 +532,29 @@ def _load_scenes() -> list[dict]:
         return []
 
 
-async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
-    """判断 query 命中哪个场景，返回场景 id；未命中返回空字符串。
+async def _judge_scene(query: str, scenes: list[dict] = None) -> tuple[str, str]:
+    """判断 query 命中哪个场景，返回 (scene_id, answer_type)。
+
+    - 命中 → (scene_id, 'faq' 或 'llm')
+    - 未命中 → ("", "")
+
     scenes 参数由调用方一次性加载后传入，避免重复查库。
     优先用 Jev Choice 判断，不可用时降级为 LLM。"""
     if scenes is None:
         scenes = _load_scenes()
     if not query or not query.strip() or not scenes:
-        return ""
+        return "", ""
 
     valid_scene_ids = {s["id"] for s in scenes}
+    scene_map = {s["id"]: s for s in scenes}
 
     # 优先用 Jev Choice 判断
     try:
         client = get_jev_client()
         criteria = {s["id"]: f"{s['name']}：{s['trigger']}" for s in scenes}
+        # 加 other 选项作为"不匹配"出口，让 Choice 自己判断是否命中
+        # 实测：比 Noul 守门更准（Noul 容易把正常问题当闲聊挡掉）
+        criteria["other"] = "其他：不属于以上任何场景的问题"
         result = await asyncio.wait_for(
             asyncio.to_thread(
                 client.system_one,
@@ -554,21 +564,18 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
                         instructions="`user_query` 命中以下哪个预设场景？",
                         criteria=criteria,
                     ),
-                    "has_match": Noul(
-                        instructions="`user_query` 明确命中某个预设场景的触发条件？如果只是泛泛提问或闲聊，未命中任何场景。",
-                    ),
                 },
             ),
             timeout=15,
         )
-        has_match = result.nouls["has_match"].noul > 0.7
-        if has_match:
-            hit_id = result.choices["scene_hit"].choice
-            if hit_id in valid_scene_ids:
-                logger.info(f"[SceneJudge] Jev 命中场景: {hit_id} query='{query[:50]}'")
-                return hit_id
-        logger.info(f"[SceneJudge] Jev 未命中 has_match={result.nouls['has_match'].noul:.4f} query='{query[:50]}'")
-        return ""
+        hit_id = result.choices["scene_hit"].choice
+        if hit_id in valid_scene_ids:
+            answer_type = scene_map[hit_id].get("answer_type", "llm")
+            top_prob = result.choices["scene_hit"].probabilities.get(hit_id, 0)
+            logger.info(f"[SceneJudge] Jev 命中场景: {hit_id} prob={top_prob:.2f} type={answer_type} query='{query[:50]}'")
+            return hit_id, answer_type
+        logger.info(f"[SceneJudge] Jev 未命中 choice={hit_id} query='{query[:50]}'")
+        return "", ""
     except asyncio.TimeoutError:
         logger.warning(f"[SceneJudge] Jev 超时(15s)，降级为 LLM 判断")
     except Exception as e:
@@ -606,139 +613,15 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> str:
         m = _re.search(r'"scene"\s*:\s*"?([a-z0-9_-]+)"?', text)
         hit = m.group(1) if m else ""
         if hit in valid_scene_ids:
-            return hit
-        return ""
+            answer_type = scene_map[hit].get("answer_type", "llm")
+            return hit, answer_type
+        return "", ""
     except asyncio.TimeoutError:
         logger.warning(f"[SceneJudge] LLM 超时，按未命中放行: query='{query[:50]}'")
-        return ""
+        return "", ""
     except Exception as e:
         logger.error(f"[SceneJudge] LLM 兜底也失败，按未命中放行: {e}")
-        return ""
-
-
-# ================= FAQ 快速匹配（置于入口之后，最先判断） =================
-_faq_cache: dict = {"questions": [], "answers": [], "bm25": None}  # FAQ 缓存：进程内缓存一份 (questions, answers, bm25)，避免每问都查库+重建索引
-
-# FAQ 快速匹配（BM25 + jieba 分词）
-FAQ_TABLE = config['PG_MYAGENT_FAQ_TABLE']
-FAQ_COVERAGE_THRESHOLD = float(config['FAQ_COVERAGE_THRESHOLD'])  # 查询分词位于Top 1文档分词的IDF加权概率
-FAQ_RATIO_THRESHOLD = float(config['FAQ_RATIO_THRESHOLD'])  # Top1 Score/(Top1 Score + Top2 Score)
-
-class _FaqBM25(BM25Plus):          # 继承 rank_bm25 库的 BM25Plus
-    def __init__(self, faq_tokenized: list[list[str]], idf: dict[str, float]):
-        super().__init__(faq_tokenized)      # 用父类初始化，但只喂 FAQ 问题
-        self.idf = {**self.idf, **idf}       # 用外部传入的 IDF 覆盖父类算的 IDF
-
-def _load_faq() -> tuple[list[str], list[str], BM25Plus]:  # 从 PG 加载全部 FAQ，并用 kb 全量语料的 IDF 构建 BM25 索引
-    try:
-        with _get_pg_pool().connection() as conn, conn.cursor() as cur:
-            cur.execute(f"SELECT question, answer FROM {FAQ_TABLE} ORDER BY id")
-            rows = cur.fetchall()
-            cur.execute(f"SELECT parent_content FROM {os.getenv('PG_MYAGENT_KB_TABLE', '')} WHERE parent_content IS NOT NULL")
-            kb_rows = cur.fetchall()
-    except Exception as e:
-        logger.warning(f"[FaqMatch] 加载FAQ/KB失败: {e}")
-        return [], [], None
-
-    questions = [r[0] for r in rows if r[0]]
-    answers = [r[1] for r in rows if r[0]]
-    if not questions:
-        return [], [], None
-    faq_tokenized = [list(jieba.cut(q)) for q in questions] # kb 全量语料分词，仅用于统计文档频率 → 算 IDF
-    kb_tokenized = [list(jieba.cut(r[0])) for r in kb_rows if r[0]]
-    idf = _calc_idf_from_corpus(kb_tokenized)
-    bm25 = _FaqBM25(faq_tokenized, idf)
-    return questions, answers, bm25
-
-def _calc_idf_from_corpus(tokenized_corpus: list[list[str]]) -> dict[str, float]:
-    import math
-    n = len(tokenized_corpus)
-    if n == 0:
-        return {}
-    df: dict[str, int] = {}
-    for doc in tokenized_corpus:
-        for word in set(doc):
-            df[word] = df.get(word, 0) + 1
-    return {word: math.log((n + 1) / d) for word, d in df.items()}
-
-def _get_faq_bm25() -> tuple[list[str], list[str], BM25Plus]:
-    if not _faq_cache["questions"] or _faq_cache["bm25"] is None:
-        qs, ans, bm25 = _load_faq()
-        _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-        logger.debug(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
-    return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
-
-_faq_load_lock: "asyncio.Lock | None" = None  # 跨并发抢建索引的进程内互斥锁（异步上下文使用）
-
-async def _aget_faq_bm25() -> tuple[list[str], list[str], BM25Plus]:
-    """异步取 FAQ 索引：缓存命中直接返回，未命中则丢到线程池加载，避免阻断事件循环。"""
-    global _faq_load_lock
-    if _faq_load_lock is None:
-        _faq_load_lock = asyncio.Lock()
-    if _faq_cache["questions"] and _faq_cache["bm25"] is not None:
-        return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
-    async with _faq_load_lock:
-        # 双重检查：持锁期间可能已被其它协程加载完成
-        if _faq_cache["questions"] and _faq_cache["bm25"] is not None:
-            return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
-        qs, ans, bm25 = await asyncio.to_thread(_load_faq)
-        _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-        logger.debug(f"[FaqMatch] FAQ索引已加载：{len(qs)} 条（IDF来自kb语料）")
-    return _faq_cache["questions"], _faq_cache["answers"], _faq_cache["bm25"]
-
-def preload_faq_index() -> None:
-    """启动预热：worker 进程内预构建 FAQ BM25 索引。
-
-    调用后首个请求不必现场同步重建索引（重建需对 kb 全量语料分词算 IDF，
-    同步执行会阻塞事件循环数秒）。每个 worker 进程独立持有 _faq_cache，均需预热。
-    """
-    if _faq_cache["questions"] and _faq_cache["bm25"] is not None:
-        return
-    qs, ans, bm25 = _load_faq()
-    _faq_cache.update(questions=qs, answers=ans, bm25=bm25)
-    logger.debug(f"[FaqMatch] 启动预热完成：{len(qs)} 条FAQ，IDF来自kb语料")
-
-async def node_faq_match(state: ChatState) -> ChatState:
-    query = state["messages"][-1].content if state["messages"] else ""
-    if not query or not query.strip():
-        return {"mode": state.get("mode", "rag")}
-
-    try:
-        questions, answers, bm25 = await _aget_faq_bm25()
-        if not questions or bm25 is None:
-            return {"mode": state.get("mode", "rag")}
-
-        tokens = [t for t in jieba.cut(query) if t.strip()]
-        scores = bm25.get_scores(tokens)
-        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-        top1_idx, top1_score = ranked[0]
-        top2_score = ranked[1][1] if len(ranked) > 1 else 0.0
-
-        # 绝对相关度：查询的不重复词中，多大比例（按 IDF 加权）命中了 TOP1 文档
-        unique_tokens = set(tokens)
-        total_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens)
-        hit_weight = sum(bm25.idf.get(t, 0) for t in unique_tokens
-                         if bm25.doc_freqs[top1_idx].get(t, 0) > 0)
-        coverage = hit_weight / total_weight if total_weight > 0 else 0.0
-
-        # 相对区分度：TOP1 在 TOP1+TOP2 中的占比，[0.5, 1]
-        ratio = top1_score / (top1_score + top2_score) if (top1_score + top2_score) > 0 else 1.0
-        logger.info(f"[FaqMatch] query='{query[:50]}' TOP1={top1_score:.4f} coverage={coverage:.4f} ratio={ratio:.4f}")
-
-        if coverage >= FAQ_COVERAGE_THRESHOLD and ratio >= FAQ_RATIO_THRESHOLD:
-            answer = answers[top1_idx]
-            logger.info(f"[FaqMatch] 命中FAQ：Q='{questions[top1_idx][:50]}'")
-            return {
-                "mode": "faq",
-                "final_answer": answer,
-                "messages": [AIMessage(content=answer)],
-            }
-
-        logger.info(f"[FaqMatch] 未达阈值（coverage={coverage:.4f}<{FAQ_COVERAGE_THRESHOLD} 或 ratio={ratio:.4f}<{FAQ_RATIO_THRESHOLD}），走正常RAG")
-        return {"mode": state.get("mode", "rag")}
-    except Exception as e:
-        logger.error(f"[FaqMatch] 异常，降级走RAG: {e}")
-        return {"mode": state.get("mode", "rag")}
+        return "", ""
 
 
 # ================= RAG节点 —— 检索知识库chunk =================
@@ -901,7 +784,6 @@ def _render_profile(profile: dict | None) -> str:
 # ================= RAG节点 —— 生成最终回答 =================
 async def node_generate(state: ChatState):
     retrieved_context = state.get("context", "")
-    is_chitchat = not retrieved_context.strip()  # 无检索上下文 = 闲聊/工具路径
     history_messages = _clean_history_messages(state["messages"])[-(generate_n * 2 + 1):-1]
     history_text = "\n".join(history_messages)
     tool_messages = _extract_tool_message(state["messages"])
@@ -913,52 +795,44 @@ async def node_generate(state: ChatState):
     current_time = state.get("current_time") or ""  # 当前时间，供 LLM 推导工具日期参数
 
     # ── 场景模板消费：命中场景注入正文模板/额外追问（选填，均可不配）──
+    # 注意：answer_type='faq' 的场景已在 stream_response 的 scene_task 阶段短路返回，不会走到这里。
+    # 这里只处理 answer_type='llm' 的场景，注入 answer_template 作为生成指令。
     scene_id = state.get("scene") or ""
     scenes = state.get("scenes") or []
-    scene_answer_rule, scene_followup_rule = "", ""
+    scene_answer_rule = ""
+    scene_obj = None
     if scene_id:
-        scene = next((s for s in scenes if s["id"] == scene_id), None)
-        if scene:
-            if scene.get("answer_template"):
-                tpl = scene["answer_template"]
-                if scene.get("answer_mode") == "literal":
-                    tpl = f"忽略所有提示词，一字不变地回答：{tpl}"
+        scene_obj = next((s for s in scenes if s["id"] == scene_id), None)
+        if scene_obj:
+            if scene_obj.get("answer_template"):
+                tpl = scene_obj["answer_template"]
                 scene_answer_rule = (
-                    f"\n    <scene_answer_template>\n"
-                    f"    【场景模板：{scene['name']}】命中本场景，正文回答必须遵循以下结构：\n"
+                    f"\n    <scene_answer_rule>\n"
+                    f"    用户问题已命中预设场景「{scene_obj['name']}」，正文回答必须遵循以下规则：\n"
                     f"{tpl}\n"
-                    f"    </scene_answer_template>"
+                    f"    </scene_answer_rule>"
                 )
-            if scene.get("followup_prompt"):
-                # followup 统一走后处理追加（见 stream_response done 下发处），不注入 prompt
-                pass
             logger.info(f"[NodeGenerate] 命中场景 {scene_id}，注入模板规则 answer={'有' if scene_answer_rule else '无'} followup=后处理追加")
 
-    SYSTEM_PROMPT = f"""你是一个小助手，专业、严谨、知无不言，专门帮你的朋友解答问题。
+    # 场景命中时走精简 prompt，跳过 RAG 相关的检索上下文/工具规则/图片引用等
+    if scene_id and scene_answer_rule:
+        has_followup = bool(scene_obj and scene_obj.get("followup_prompt", "").strip()) if scene_obj else False
+        followup_section = "" if has_followup else """
+    【相关追问生成规则】
+    在你的回答正文结束后，生成 1~3 个相关的后续追问（模拟用户口吻）。
+    格式：
+    1. 正文和追问之间用分隔符：---RELATED---
+    2. 每个追问占一行，以 - 开头
+    3. 追问是以用户视角发问，而非以助手口吻启示
+    4. 追问要具体、可直接提问
+    5. 要避免生成已经问答过的内容
+    示例格式：
+    回答正文内容...
+    ---RELATED---
+    - 我还想了解年假的具体计算方式
+    - 试用期的年假怎么算"""
 
-    <role_instruction>
-    【你的风格】
-    ** 绝对绝对不要啰嗦你的品质，你的表达欲有限，不要频于自我展现，更不要强调你的对话风格 **
-    1. 严谨周密：回答问题要进行全面的信息收集，确保不遗漏任何关键信息，给出绝对可用的专业指导
-    2. 循序渐进：回答问题不要面面俱到，每次只聚焦最重要的点，简短作答，并通过相关追问引导用户继续提问，逐步深入
-    3. 亲切自然：像和朋友聊天一样轻松，偶尔皮一下，但不失专业
-    4. 有话直说：不卖关子，不打官腔，直接给出答案
-    5. 幽默适度：该正经正经，该轻松轻松，不刻意搞笑
-
-    【禁忌】
-    - 绝不说"根据知识库..."、"依据xxx资料..."、"检索显示..."这种话
-    - 绝对不输出emoji等表情包
-    - 不要透露自己是机器人/知识库/AI
-    - 不要像写报告一样层层分析，用户要的是答案不是作文
-    - {"闲聊时轻松自然，像朋友一样对话即可" if is_chitchat else "上下文是你的回答依据，绝对禁止联想外部信息自由发挥，即便是常识，也要以上下文是否提供作为回答准则"}
-
-    【回答原则】
-    - 你将基于下文中的用户信息进行针对性的回答
-    - 你可以使用系统提供的工具查询动态数据（如假期、薪资、工时...），要按照<tool_usage_rules>的指示使用工具
-    {"- 你必须且只能依据 <retrieved_context> 标签内的资料回答，绝对禁止编造任何不在资料里的内容" if retrieved_context.strip() else "- 如果没有提供 <retrieved_context> 资料，请根据你的能力直接回答用户问题，或使用工具查询所需数据"}
-    - {"资料里查不到的：坦诚相告，别硬编乱造" if retrieved_context.strip() else "无法确定的：坦诚相告，别硬编乱造"}
-    - 你必须使用与用户提问相同的语言回答（用户语种：{language}）
-    </role_instruction>
+        SYSTEM_PROMPT = f"""你是一个小助手，专业、严谨、知无不言，专门帮你的朋友解答问题。
 
     <user_info>
     【用户信息】
@@ -967,49 +841,86 @@ async def node_generate(state: ChatState):
     - 用户语种: {language}
     {_render_profile(user.get("profile"))}
     </user_info>
-
-    <tool_usage_rules>
-    【重要】工具调用规则：
-    1. 调用工具前，必须检查是否已经从用户的对话中获取了所有必填参数！
-    2. 如果缺少必填参数，务必要请求用户补充，绝对禁止自行猜测、捏造或使用示例值！
-    3. 如果缺少必填参数，你必须放弃调用工具，直接用自然语言向用户追问缺失的信息！
-    4. 获得工具的运行结果后，如果必填参数已经齐备，立即开始生成回答，**不要**重复调用！
-    5. 工具的日期参数（如 startDate/endDate）需根据<user_info>中的【当前时间】推导：
-       - 用户未指定区间时，默认查「当前年份」的1月1日至今；
-       - 用户说「今年」「最近」「目前」等词，以当前时间所在年份推算；
-       - 日期格式必须为 dd/mm/yyyy（如 01/01/2026）。
-    </tool_usage_rules>
-
-    <retrieved_context>
-    {retrieved_context}
-    </retrieved_context>
-
-    请结合上述规则和背景资料，直接回答用户的最新问题。
-
-    【图片引用要求】
-    - 上下文<retrieved_context>可能包含 Markdown 图片链接（形如 ![](/api/media/...)）
-    - 若某张图片与当前回答直接相关，必须将其图片链接原样内联到回答正文的对应位置，链接的 URL 要一字不改地照抄（不得截断、改写、转义或 `-` 换行），否则图片无法加载
-    - 不相关的图片链接不要带入回答
-
     {scene_answer_rule}
-
-    【相关追问生成规则】
-    在你的回答正文结束后，{"如果是在闲聊/打招呼，生成 1 个自然的追问引导用户继续对话即可" if is_chitchat else "必须基于上下文<retrieved_context>，生成 1~3 个相关的后续追问（模拟用户口吻），并保证该追问的答案在上下文中有体现"}。
-    格式：
-    1. 正文和追问之间用分隔符：---RELATED---
-    2. 每个追问占一行，以 - 开头
-    3. 追问是以用户视角发问，而非以助手口吻启示，比如可以是“那B如何实现？”，而不能是“你是否还想了解B如何实现？”
-    4. 追问要具体、可直接提问
-    {"5. 追问可以基于当前话题自然延伸" if is_chitchat else "5. 追问必须完全基于上下文内容，不许联想外部信息，避免用户追问却得不到回答"}
-    6. 要避免生成已经问答过的内容
-    7. 如果是闲聊/打招呼/情绪安抚类，生成 1 个追问即可
-    {scene_followup_rule}
-    示例格式：
-    回答正文内容...
-    ---RELATED---
-    - 我还想了解年假的具体计算方式
-    - 试用期的年假怎么算
+    请直接回答用户的最新问题。
+    - 你必须使用与用户提问相同的语言回答（用户语种：{language}）
+    - 绝对不输出emoji等表情包
+    - 不要透露自己是机器人/知识库/AI{followup_section}
     """
+    else:
+         SYSTEM_PROMPT = f"""你是一个小助手，专业、严谨、知无不言，专门帮你的朋友解答问题。
+    
+        <role_instruction>
+        【你的风格】
+        ** 绝对绝对不要啰嗦你的品质，你的表达欲有限，不要频于自我展现，更不要强调你的对话风格 **
+        1. 严谨周密：回答问题要进行全面的信息收集，确保不遗漏任何关键信息，给出绝对可用的专业指导
+        2. 循序渐进：回答问题不要面面俱到，每次只聚焦最重要的点，简短作答，并通过相关追问引导用户继续提问，逐步深入
+        3. 亲切自然：像和朋友聊天一样轻松，偶尔皮一下，但不失专业
+        4. 有话直说：不卖关子，不打官腔，直接给出答案
+        5. 幽默适度：该正经正经，该轻松轻松，不刻意搞笑
+    
+        【禁忌】
+        - 绝不说"根据知识库..."、"依据xxx资料..."、"检索显示..."这种话
+        - 绝对不输出emoji等表情包
+        - 不要透露自己是机器人/知识库/AI
+        - 不要像写报告一样层层分析，用户要的是答案不是作文
+        - 上下文是你的回答依据，绝对禁止联想外部信息自由发挥，即便是常识，也要以上下文是否提供作为回答准则
+    
+        【回答原则】
+        - 你将基于下文中的用户信息进行针对性的回答
+        - 你可以使用系统提供的工具查询动态数据（如假期、薪资、工时...），要按照<tool_usage_rules>的指示使用工具
+        {"- 你必须且只能依据 <retrieved_context> 标签内的资料回答，绝对禁止编造任何不在资料里的内容" if retrieved_context.strip() else "- 如果没有提供 <retrieved_context> 资料，请根据你的能力直接回答用户问题，或使用工具查询所需数据"}
+        - {"资料里查不到的：坦诚相告，别硬编乱造" if retrieved_context.strip() else "无法确定的：坦诚相告，别硬编乱造"}
+        - 你必须使用与用户提问相同的语言回答（用户语种：{language}）
+        </role_instruction>
+    
+        <user_info>
+        【用户信息】
+        - 昵称: {user.get("username")}
+        - 当前时间: {current_time}
+        - 用户语种: {language}
+        {_render_profile(user.get("profile"))}
+        </user_info>
+    
+        <tool_usage_rules>
+        【重要】工具调用规则：
+        1. 调用工具前，必须检查是否已经从用户的对话中获取了所有必填参数！
+        2. 如果缺少必填参数，务必要请求用户补充，绝对禁止自行猜测、捏造或使用示例值！
+        3. 如果缺少必填参数，你必须放弃调用工具，直接用自然语言向用户追问缺失的信息！
+        4. 获得工具的运行结果后，如果必填参数已经齐备，立即开始生成回答，**不要**重复调用！
+        5. 工具的日期参数（如 startDate/endDate）需根据<user_info>中的【当前时间】推导：
+           - 用户未指定区间时，默认查「当前年份」的1月1日至今；
+           - 用户说「今年」「最近」「目前」等词，以当前时间所在年份推算；
+           - 日期格式必须为 dd/mm/yyyy（如 01/01/2026）。
+        </tool_usage_rules>
+    
+        <retrieved_context>
+        {retrieved_context}
+        </retrieved_context>
+        {scene_answer_rule}
+        请结合上述规则和背景资料，直接回答用户的最新问题。
+    
+        【图片引用要求】
+        - 上下文<retrieved_context>可能包含 Markdown 图片链接（形如 ![](/api/media/...)）
+        - 若某张图片与当前回答直接相关，必须将其图片链接原样内联到回答正文的对应位置，链接的 URL 要一字不改地照抄（不得截断、改写、转义或 `-` 换行），否则图片无法加载
+        - 不相关的图片链接不要带入回答
+    
+        【相关追问生成规则】
+        在你的回答正文结束后，必须基于上下文<retrieved_context>，生成 1~3 个相关的后续追问（模拟用户口吻），并保证该追问的答案在上下文中有体现。
+        格式：
+        1. 正文和追问之间用分隔符：---RELATED---
+        2. 每个追问占一行，以 - 开头
+        3. 追问是以用户视角发问，而非以助手口吻启示，比如可以是“那B如何实现？”，而不能是“你是否还想了解B如何实现？”
+        4. 追问要具体、可直接提问
+        5. 追问必须完全基于上下文内容，不许联想外部信息，避免用户追问却得不到回答
+        6. 要避免生成已经问答过的内容
+        7. 如果是闲聊/打招呼/情绪安抚类，生成 1 个追问即可
+        示例格式：
+        回答正文内容...
+        ---RELATED---
+        - 我还想了解年假的具体计算方式
+        - 试用期的年假怎么算
+        """
 
     USER_PROMPT = f"""
     <history_massage>
@@ -1125,7 +1036,6 @@ builder = StateGraph(ChatState)
 
 # 第二步：向图中添加所有节点
 builder.add_node("node_plan_retrieval", node_plan_retrieval)    # 检索策略规划（指代消解+标签匹配+检索参数决策，图入口）
-builder.add_node("node_faq_match",      node_faq_match)         # FAQ快速匹配（BM25）
 builder.add_node("node_retrieve",       node_retrieve)          # 执行检索
 builder.add_node("node_no_kb_hit",      node_no_kb_hit)         # 检索未命中兜底（返回话术，不经LLM）
 builder.add_node("tool_node",           tool_node)              # 工具节点，条件触发
@@ -1135,26 +1045,11 @@ builder.add_node("node_generate",       node_generate)          # 生成回答�
 builder.set_entry_point("node_plan_retrieval")
 
 # 第四步：定义节点之间的边（数据流向）
-# 检索规划条件边：知识库无文件 → 未命中兜底；target_tags 为空 → 闲聊/工具直走 generate；非空 → 先走 FAQ 匹配
+# 检索规划条件边：知识库无文件 → 未命中兜底；target_tags 为空 → 闲聊/工具直走 generate；非空 → 直接走检索
 builder.add_conditional_edges(
     "node_plan_retrieval",
     route_plan_retrieval,
-    {"node_faq_match": "node_faq_match", "node_no_kb_hit": "node_no_kb_hit", "node_retrieve": "node_retrieve"},
-)
-
-# FAQ 匹配：命中 → END，未命中 → 检索
-def route_faq_match(state: ChatState) -> Literal["node_retrieve", "__end__"]:
-    """FAQ 命中（mode=faq）→ END；否则走检索。"""
-    if state.get("mode") == "faq":
-        logger.info("[RouteFaq] FAQ命中，进入结束节点")
-        return END
-    logger.info("[RouteFaq] FAQ未命中，走检索")
-    return "node_retrieve"
-
-builder.add_conditional_edges(
-    "node_faq_match",
-    route_faq_match,
-    {"node_retrieve": "node_retrieve", END: END},
+    {"node_no_kb_hit": "node_no_kb_hit", "node_retrieve": "node_retrieve", "node_generate": "node_generate"},
 )
 
 # RAG链路：检索 → 条件边（context为空 → 未命中兜底，非空 → 生成）
@@ -1452,14 +1347,14 @@ async def chat_stream(
                             output = event.get("data", {}).get("output", {})
 
                             if node_name == "node_plan_retrieval":
-                                # 捕获检索规划匹配的标签（预计算失败时主图重新执行会走到这里）
+                                # 捕获检索规划匹配的标签（并行阶段失败时主图重新执行会走到这里）
                                 plan_output = output if isinstance(output, dict) else {}
                                 plan_tags = plan_output.get("target_tags")
                                 if plan_tags:
                                     ctx["target_tags"] = plan_tags
                                     logger.info(f"[Stream] on_chain_end node_plan_retrieval tags={plan_tags}")
                                 else:
-                                    logger.info(f"[Stream] on_chain_end node_plan_retrieval no tags (output keys={list(plan_output.keys())}, ctx_tags={ctx.get('target_tags')})")
+                                    logger.debug(f"[Stream] on_chain_end node_plan_retrieval no tags (output keys={list(plan_output.keys())}, ctx_tags={ctx.get('target_tags')})")
 
                             if node_name == "node_generate":
                                 # node_generate 在工具链路中会被多次执行：pass1 返回带 tool_calls 的
@@ -1499,31 +1394,21 @@ async def chat_stream(
                                         f"prompt={ctx['prompt_tokens']} completion={ctx['completion_tokens']} total={ctx['total_tokens']}"
                                     )
                                     token_acc.add(_model, ctx['prompt_tokens'] or 0, ctx['completion_tokens'] or 0, ctx['total_tokens'] or 0)
-                                    # 解析相关追问（场景命中时放宽上限，容纳场景额外追问）
-                                    max_q = 6 if ctx.get("scene_id") else 3
-                                    clean_answer, related_questions = _parse_related_questions(ctx["full_answer"], max_count=max_q)
-                                    # 场景追问后处理：把场景 followup_prompt 原文追加到追问列表末尾（不经过 LLM，保证不挤掉原有追问）
+                                    # 判断场景是否配置了 followup_prompt
                                     scene_hit_id = ctx.get("scene_id") or ""
-                                    if scene_hit_id:
-                                        scene_obj = next((s for s in _load_scenes() if s["id"] == scene_hit_id), None)
-                                        if scene_obj and scene_obj.get("followup_prompt"):
-                                            followup_q = scene_obj["followup_prompt"].strip()
-                                            if followup_q and followup_q not in related_questions:
-                                                related_questions.append(followup_q)
-                                                logger.info(f"[Stream] 场景追问追加: {followup_q[:50]}")
+                                    scene_obj = next((s for s in ctx.get("scenes", []) if s["id"] == scene_hit_id), None) if scene_hit_id else None
+                                    scene_followup = scene_obj.get("followup_prompt", "").strip() if scene_obj else ""
+                                    if scene_followup:
+                                        # 用户配了追问 → 完全替代 LLM 追问，只取用户配的内容
+                                        clean_answer, _ = _parse_related_questions(ctx["full_answer"])
+                                        related_questions = [scene_followup]
+                                        logger.info(f"[Stream] 场景追问替代LLM追问: {scene_followup[:50]}")
+                                    else:
+                                        # 用户没配追问 → 正常解析 LLM 生成的追问
+                                        clean_answer, related_questions = _parse_related_questions(ctx["full_answer"])
                                     logger.info(f"[Stream] node_generate 完成，sources={len(ctx['final_sources'])}，related={len(related_questions)}")
                                     ctx["final_related_questions"] = related_questions
                                     await q.put(f"data: {json.dumps({'type': 'done', 'sources': ctx['final_sources'], 'related_questions': related_questions})}\n\n")
-                                    _persist_turn(ctx)
-
-                            elif node_name == "node_faq_match":
-                                # FAQ 命中（mode=faq）时为终端节点：答案非 LLM 流式产出，需手动下发全文后发 done
-                                if isinstance(output, dict) and output.get("mode") == "faq":
-                                    ctx["final_mode"] = "faq"
-                                    faq_answer = output.get("final_answer", "")
-                                    ctx["full_answer"] = faq_answer
-                                    await q.put(f"data: {json.dumps({'type': 'content', 'content': faq_answer})}\n\n")
-                                    await q.put(f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n")
                                     _persist_turn(ctx)
 
                             elif node_name == "node_no_kb_hit":
@@ -1564,7 +1449,8 @@ async def chat_stream(
 
             # 先等敏感/场景判定完成（~1.9s，两者都比 plan_retrieval 快）
             await asyncio.gather(sens_task, scene_task, return_exceptions=True)
-            scene_id = scene_task.result() if not isinstance(scene_task.exception(), Exception) else ""
+            scene_result = scene_task.result() if not isinstance(scene_task.exception(), Exception) else ("", "")
+            scene_id, answer_type = scene_result if isinstance(scene_result, tuple) else ("", "")
             sens_result = sens_task.result() if not isinstance(sens_task.exception(), Exception) else "miss"
 
             if sens_result == "hit":
@@ -1572,21 +1458,44 @@ async def chat_stream(
                 if not plan_task.done():
                     plan_task.cancel()
                 logger.warning("[Sensitive] 命中敏感话题，返回固定话术（已取消并行规划任务）")
+            elif scene_id and answer_type == "faq":
+                # FAQ 类型场景命中：直接返回预设答案，不走主图
+                hit = True
+                if not plan_task.done():
+                    plan_task.cancel()
+                scene_obj = next((s for s in scenes if s["id"] == scene_id), None)
+                if scene_obj:
+                    ctx["final_mode"] = "faq"
+                    ctx["full_answer"] = scene_obj.get("answer_template", "")
+                    ctx["scene_id"] = scene_id
+                    ctx["scenes"] = scenes
+                    logger.info(f"[SceneJudge] FAQ场景命中: {scene_id} 直接返回预设答案")
+                else:
+                    hit = False
+                    logger.warning(f"[SceneJudge] FAQ场景命中但找不到场景对象: {scene_id}")
             else:
                 hit = False
                 if scene_id:
+                    # LLM 类型场景命中：注入 scene_id，跳过检索直接生成
                     initial_state["scene"] = scene_id
                     ctx["scene_id"] = scene_id
-                    logger.info(f"[SceneJudge] 命中场景: {scene_id}")
-                # 等待检索规划完成（可能已完成，也可能还需等待 ~2s）
-                try:
-                    plan_result = await plan_task
-                    if isinstance(plan_result, dict) and plan_result:
-                        initial_state.update(plan_result)
-                        logger.info(f"[PlanRetrieval] 预计算结果已注入 initial_state，主图将跳过规划节点")
-                except Exception as e:
-                    logger.warning(f"[PlanRetrieval] 预计算失败，将由主图重新执行: {e}")
-                # 从预计算结果中提取 target_tags（若主图重新执行 plan_retrieval，on_chain_end 会覆盖）
+                    ctx["scenes"] = scenes
+                    # 场景命中不需要检索规划，取消 plan_task 并注入占位字段让 node_plan_retrieval 秒跳过
+                    if not plan_task.done():
+                        plan_task.cancel()
+                    initial_state["query"] = message
+                    initial_state["file_descriptions"] = []
+                    logger.info(f"[SceneJudge] LLM场景命中: {scene_id}，跳过检索直接生成")
+                else:
+                    # 未命中场景：等检索规划完成并注入 state
+                    try:
+                        plan_result = await plan_task
+                        if isinstance(plan_result, dict) and plan_result:
+                            initial_state.update(plan_result)
+                            logger.debug(f"[PlanRetrieval] 检索规划已在并行阶段完成，主图跳过重复执行")
+                    except Exception as e:
+                        logger.warning(f"[PlanRetrieval] 并行阶段检索规划失败，主图将重新执行: {e}")
+                # 从 state 中提取 target_tags
                 ctx["target_tags"] = initial_state.get("target_tags")
 
             # ── 主图事件循环 + 并行消费（敏感命中则跳过主图）──
@@ -1628,23 +1537,38 @@ async def chat_stream(
                         yield f"data: {json.dumps({'type': 'content', 'content': ctx['full_answer']})}\n\n"
                     yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
             else:
-                # 敏感命中：取消未完成的判定任务，不进入主图事件循环
+                # 敏感或FAQ场景命中：不进入主图事件循环
                 if not scene_task.done():
                     scene_task.cancel()
                 if not sens_task.done():
                     sens_task.cancel()
 
-            # ── 命中敏感：丢弃主图已产内容，下发固定话术 ──
+            # ── 命中敏感或FAQ场景：下发对应内容 ──
             if hit:
-                ctx["final_mode"] = "sensitive"
-                ctx["full_answer"] = SENSITIVE_REPLY
-                ctx["final_sources"] = []
-                ctx["prompt_tokens"] = None
-                ctx["completion_tokens"] = None
-                ctx["total_tokens"] = None
-                yield f"data: {json.dumps({'type': 'content', 'content': SENSITIVE_REPLY})}\n\n"
-                yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
-                _persist_turn(ctx)
+                if ctx.get("final_mode") == "faq":
+                    # FAQ 场景命中：下发预设答案
+                    faq_answer = ctx.get("full_answer", "")
+                    # followup 追加（如果配了 followup_prompt）
+                    related_questions = []
+                    scene_obj = next((s for s in scenes if s["id"] == scene_id), None) if scene_id else None
+                    if scene_obj and scene_obj.get("followup_prompt"):
+                        followup_q = scene_obj["followup_prompt"].strip()
+                        if followup_q:
+                            related_questions.append(followup_q)
+                    yield f"data: {json.dumps({'type': 'content', 'content': faq_answer})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': [], 'related_questions': related_questions})}\n\n"
+                    _persist_turn(ctx)
+                else:
+                    # 敏感命中：丢弃主图已产内容，下发固定话术
+                    ctx["final_mode"] = "sensitive"
+                    ctx["full_answer"] = SENSITIVE_REPLY
+                    ctx["final_sources"] = []
+                    ctx["prompt_tokens"] = None
+                    ctx["completion_tokens"] = None
+                    ctx["total_tokens"] = None
+                    yield f"data: {json.dumps({'type': 'content', 'content': SENSITIVE_REPLY})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done', 'sources': []})}\n\n"
+                    _persist_turn(ctx)
 
             # ── 兜底：主图/敏感/超时都未产出内容时，补发空响应提示 ──
             if not ctx["full_answer"]:

@@ -12,7 +12,7 @@
   - 预热在 startup 事件中执行，uvicorn 尚未开始接受请求，无并发冲突
   - 预热只做"初始化"和"建连"，不执行业务逻辑，不占用后续请求处理能力
   - 连接池预热后是复用的（httpx max_connections 是上限，预热用 1 条，后续请求共享池）
-  - 多 worker 各自独立预热（与 BM25 索引预热策略一致）
+  - 多 worker 各自独立预热
 """
 
 import os
@@ -132,7 +132,8 @@ async def _warmup_embedding_api():
 async def _warmup_rerank_api():
     """预热 Rerank API：实例化 httpx.AsyncClient + 发送 1 条最小 rerank 请求建连。
 
-    即使 rerank 配置有误（404），预热也能提前暴露问题，且不阻断启动。
+    启动瞬间网络栈可能未完全就绪，连接失败时自动重试 1 次（间隔 2s）。
+    即使预热失败也不阻断启动，首次检索时会再次建连。
     """
     from calculate_logic.rag.generate_answer import retriever
     t0 = time.time()
@@ -140,8 +141,17 @@ async def _warmup_rerank_api():
         if retriever.rerank_client is None:
             _log_elapsed("Rerank API(未配置，跳过)", t0, True)
             return
-        scores = await retriever.rerank_client.arerank("预热", ["预热文本"])
-        _log_elapsed(f"Rerank API(返回{len(scores)}条)", t0, True)
+        for attempt in range(2):
+            try:
+                scores = await retriever.rerank_client.arerank("预热", ["预热文本"])
+                _log_elapsed(f"Rerank API(返回{len(scores)}条)" + (f" 第{attempt+1}次尝试" if attempt else ""), t0, True)
+                return
+            except Exception:
+                if attempt == 0:
+                    logger.warning("[Warmup] Rerank API 首次连接失败，2s 后重试...")
+                    await asyncio.sleep(2)
+                else:
+                    raise
     except Exception as e:
         _log_elapsed("Rerank API", t0, False, str(e))
 
@@ -194,32 +204,15 @@ async def _warmup_fast_llm_api_ping():
 
 
 # ================================================================
-# 第三层：FAQ BM25 索引预热（KB 已改用 PG 全文检索，无需预热）
-# ================================================================
-
-def _warmup_bm25_indices():
-    """预热 FAQ BM25 索引（KB 关键词检索已改用 PG content_tsv，无需内存索引）。"""
-    from calculate_logic.rag.generate_answer import preload_faq_index
-
-    t0 = time.time()
-    try:
-        preload_faq_index()
-        _log_elapsed("FAQ BM25索引", t0, True)
-    except Exception as e:
-        _log_elapsed("FAQ BM25索引", t0, False, str(e))
-
-
-# ================================================================
 # 统一入口
 # ================================================================
 
 def run_sync_warmup():
-    """执行所有同步预热（LLM 单例、连接池实例化、BM25 索引）。
+    """执行所有同步预热（LLM 单例、连接池实例化）。
 
     在 startup 事件中同步调用，确保第一个请求到达前所有单例已就绪。
     """
     logger.info("[Warmup] 同步预热开始")
-    _warmup_bm25_indices()
     _warmup_llm_clients()
     _warmup_jev_client()
     _warmup_retriever_pool()

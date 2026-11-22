@@ -14,11 +14,10 @@ KB_TABLE = os.getenv("PG_MYAGENT_KB_TABLE", "myagent_kb_chunks")
 CONV_TABLE = os.getenv("PG_MYAGENT_CONVERSATIONS_TABLE", "myagent_conversations_history")
 SESSION_TABLE = os.getenv("PG_MYAGENT_SESSIONS_TABLE", "myagent_sessions")
 TASK_TABLE = os.getenv("PG_MYAGENT_UPLOAD_TASKS_TABLE", "myagent_upload_tasks")
-FAQ_TABLE = os.getenv("PG_MYAGENT_FAQ_TABLE", "myagent_faq")
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
 # 当前所有表，重建时先 DROP
-ALL_TABLES = [USER_TABLE, KB_TABLE, CONV_TABLE, SESSION_TABLE, TASK_TABLE, FAQ_TABLE, SCENE_TABLE]
+ALL_TABLES = [USER_TABLE, KB_TABLE, CONV_TABLE, SESSION_TABLE, TASK_TABLE, SCENE_TABLE]
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
 
 
@@ -156,29 +155,16 @@ DDL_STATEMENTS = [
     """,
     f"CREATE INDEX idx_{TASK_TABLE}_uid_status ON {TASK_TABLE} (uid, status)",
 
-    # ─── FAQ 表（全局共享）───
-    f"""
-    CREATE TABLE {FAQ_TABLE} (
-        id            BIGSERIAL PRIMARY KEY,
-        question      TEXT NOT NULL,
-        answer        TEXT NOT NULL,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-    """,
-    f"CREATE INDEX idx_{FAQ_TABLE}_question ON {FAQ_TABLE} (question)",
-
-    # ─── 场景模板表（全局共享）───
+    # ─── 场景模板表 ───
     f"""
     CREATE TABLE {SCENE_TABLE} (
         id               BIGSERIAL PRIMARY KEY,
         scene_id         TEXT NOT NULL UNIQUE,
         name             TEXT NOT NULL,
         trigger          TEXT NOT NULL DEFAULT '',
+        answer_type      TEXT NOT NULL DEFAULT 'llm',
         answer_template  TEXT NOT NULL DEFAULT '',
-        answer_mode      TEXT NOT NULL DEFAULT 'prompt',
         followup_prompt  TEXT NOT NULL DEFAULT '',
-        followup_mode    TEXT NOT NULL DEFAULT 'prompt',
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -186,7 +172,7 @@ DDL_STATEMENTS = [
 ]
 
 SCENE_SEED = [
-    {"scene_id": "maternity", "name": "产假/陪产假", "trigger": "用户询问产假、陪产假、陪产假政策、生育津贴、产假申请等", "answer_template": "", "followup_prompt": "在原有追问基础上，额外生成 1 个关于【生育津贴】申领条件、材料或流程的追问，引导用户继续了解生育津贴。"},
+    {"scene_id": "say_hi", "name": "问候", "trigger": "用户向我们打招呼", "answer_type": "llm", "answer_template": "礼貌的回应用户，并告知今天的日期", "followup_prompt": "想知道象象仔能左什么吗？"},
 ]
 
 
@@ -220,9 +206,9 @@ def main():
     # 场景模板 seed
     for s in SCENE_SEED:
         cur.execute(
-            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_template, followup_prompt) "
-            f"VALUES (%s, %s, %s, %s, %s) ON CONFLICT (scene_id) DO NOTHING",
-            (s["scene_id"], s["name"], s["trigger"], s["answer_template"], s["followup_prompt"]),
+            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
+            f"VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (scene_id) DO NOTHING",
+            (s["scene_id"], s["name"], s["trigger"], s.get("answer_type", "llm"), s["answer_template"], s["followup_prompt"]),
         )
     print(f"[Seed] 场景模板 {len(SCENE_SEED)} 条")
 
