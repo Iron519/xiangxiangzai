@@ -508,15 +508,22 @@ async def _judge_sensitive(query: str) -> str:
 # ================= 检测场景命中，调用场景模板（查表注入，实时生效） =================
 SCENE_TABLE = os.getenv("PG_MYAGENT_SCENE_TABLE", "myagent_scene_templates")
 
-def _load_scenes() -> list[dict]:
-    # 从 PG 加载全部启用的场景模板,表极小（个位数行），同步查库耗时毫秒级。
+def _load_scenes(uid: str = "") -> list[dict]:
+    # 从 PG 加载指定用户的场景模板,表极小（个位数行），同步查库耗时毫秒级。
     # 每次查库保证多 worker 数据完全一致，无需缓存。
     try:
         with _get_pg_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-            cur.execute(
-                f"SELECT scene_id, name, trigger, answer_type, answer_template, followup_prompt "
-                f"FROM {SCENE_TABLE} ORDER BY id"
-            )
+            if uid:
+                cur.execute(
+                    f"SELECT scene_id, name, trigger, answer_type, answer_template, followup_prompt "
+                    f"FROM {SCENE_TABLE} WHERE uid=%s ORDER BY id",
+                    (uid,)
+                )
+            else:
+                cur.execute(
+                    f"SELECT scene_id, name, trigger, answer_type, answer_template, followup_prompt "
+                    f"FROM {SCENE_TABLE} ORDER BY id"
+                )
             rows = cur.fetchall()
         scenes = [
             {
@@ -545,7 +552,7 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> tuple[str, str]
     scenes 参数由调用方一次性加载后传入，避免重复查库。
     优先用 Jev Choice 判断，不可用时降级为 LLM。"""
     if scenes is None:
-        scenes = _load_scenes()
+        scenes = _load_scenes(uid="")
     if not query or not query.strip() or not scenes:
         return "", ""
 
@@ -1446,7 +1453,7 @@ async def chat_stream(
             # - 检索规划：Fast LLM，~4.1s（最慢，但与判定无依赖）
             # 策略：先等敏感/场景（快），命中敏感则取消规划任务；未命中则等规划完成并注入 state，
             # 使主图启动时 node_plan_retrieval 检测到预计算结果直接跳过，节省 ~1.9s 串行等待。
-            scenes = _load_scenes()
+            scenes = _load_scenes(uid=uid)
             initial_state["scenes"] = scenes
             sens_task = asyncio.create_task(_judge_sensitive(message))
             scene_task = asyncio.create_task(_judge_scene(message, scenes))

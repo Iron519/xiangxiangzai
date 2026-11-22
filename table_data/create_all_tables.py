@@ -155,24 +155,27 @@ DDL_STATEMENTS = [
     """,
     f"CREATE INDEX idx_{TASK_TABLE}_uid_status ON {TASK_TABLE} (uid, status)",
 
-    # ─── 场景模板表 ───
+    # ─── 场景模板表（按用户隔离）───
     f"""
     CREATE TABLE {SCENE_TABLE} (
         id               BIGSERIAL PRIMARY KEY,
-        scene_id         TEXT NOT NULL UNIQUE,
+        uid              VARCHAR(5) NOT NULL,
+        scene_id         TEXT NOT NULL,
         name             TEXT NOT NULL,
         trigger          TEXT NOT NULL DEFAULT '',
         answer_type      TEXT NOT NULL DEFAULT 'llm',
         answer_template  TEXT NOT NULL DEFAULT '',
         followup_prompt  TEXT NOT NULL DEFAULT '',
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (uid, scene_id)
     )
     """,
+    f"CREATE INDEX idx_{SCENE_TABLE}_uid ON {SCENE_TABLE} (uid)",
 ]
 
 SCENE_SEED = [
-    {"scene_id": "say_hi", "name": "问候", "trigger": "用户向我们打招呼", "answer_type": "llm", "answer_template": "礼貌的回应用户，并告知今天的日期", "followup_prompt": "想知道象象仔能左什么吗？"},
+    {"uid": "00000", "scene_id": "say_hi", "name": "问候", "trigger": "用户向我们打招呼", "answer_type": "llm", "answer_template": "礼貌的回应用户，并告知今天的日期", "followup_prompt": "想知道象象仔能左什么吗？"},
 ]
 
 
@@ -206,9 +209,9 @@ def main():
     # 场景模板 seed
     for s in SCENE_SEED:
         cur.execute(
-            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
-            f"VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (scene_id) DO NOTHING",
-            (s["scene_id"], s["name"], s["trigger"], s.get("answer_type", "llm"), s["answer_template"], s["followup_prompt"]),
+            f"INSERT INTO {SCENE_TABLE} (uid, scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT (uid, scene_id) DO NOTHING",
+            (s["uid"], s["scene_id"], s["name"], s["trigger"], s.get("answer_type", "llm"), s["answer_template"], s["followup_prompt"]),
         )
     print(f"[Seed] 场景模板 {len(SCENE_SEED)} 条")
 

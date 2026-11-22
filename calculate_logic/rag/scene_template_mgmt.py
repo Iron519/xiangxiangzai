@@ -99,12 +99,14 @@ router = APIRouter(prefix="/api/v1/scene-templates", tags=["SceneTemplate"])
 
 
 @router.get("", response_model=Response)
-async def list_scene_templates(_: TokenData = Depends(get_current_user)):
-    """查询全部场景模板（按 id 正序）。"""
+async def list_scene_templates(current_user: TokenData = Depends(get_current_user)):
+    """查询当前用户的全部场景模板（按 id 正序）。"""
+    uid = current_user.uid
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
         cur.execute(
             f"SELECT id, scene_id, name, trigger, answer_type, answer_template, followup_prompt, created_at, updated_at "
-            f"FROM {SCENE_TABLE} ORDER BY id ASC"
+            f"FROM {SCENE_TABLE} WHERE uid=%s ORDER BY id ASC",
+            (uid,)
         )
         rows = cur.fetchall()
     return Response.ok(data=[
@@ -134,23 +136,23 @@ async def create_scene_template(body: SceneTemplateCreate, current_user: TokenDa
     if answer_type not in ("llm", "faq"):
         return Response.fail(code=400, message="answer_type 只能是 'llm' 或 'faq'")
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        # 50 条上限校验
-        cur.execute(f"SELECT COUNT(*) AS cnt FROM {SCENE_TABLE}")
+        # 50 条上限校验（按用户计数）
+        cur.execute(f"SELECT COUNT(*) AS cnt FROM {SCENE_TABLE} WHERE uid=%s", (current_user.uid,))
         cnt = cur.fetchone()["cnt"]
         if cnt >= 50:
             conn.commit()
             return Response.fail(code=400, message="场景数量已达上限（50条），请先删除不需要的场景")
-        # scene_id 去重校验
+        # scene_id 去重校验（同用户内）
         cur.execute(
-            f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (sid,),
+            f"SELECT id FROM {SCENE_TABLE} WHERE uid=%s AND scene_id=%s", (current_user.uid, sid,),
         )
         if cur.fetchone():
             conn.commit()
             return Response.fail(code=400, message=f"场景 {sid} 已存在")
         cur.execute(
-            f"INSERT INTO {SCENE_TABLE} (scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
-            f"VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-            (sid, name, body.trigger.strip(), answer_type, body.answer_template.strip(),
+            f"INSERT INTO {SCENE_TABLE} (uid, scene_id, name, trigger, answer_type, answer_template, followup_prompt) "
+            f"VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (current_user.uid, sid, name, body.trigger.strip(), answer_type, body.answer_template.strip(),
              body.followup_prompt.strip()),
         )
         new_id = cur.fetchone()["id"]
@@ -171,21 +173,21 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
     if answer_type not in ("llm", "faq"):
         return Response.fail(code=400, message="answer_type 只能是 'llm' 或 'faq'")
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
+        cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE uid=%s AND scene_id=%s", (current_user.uid, scene_id))
         if not cur.fetchone():
             conn.commit()
             return Response.fail(code=404, message=f"场景 {scene_id} 不存在")
-        # scene_id 改了的话检查新 scene_id 是否冲突
+        # scene_id 改了的话检查新 scene_id 是否冲突（同用户内）
         if sid != scene_id:
-            cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s AND scene_id != %s", (sid, scene_id))
+            cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE uid=%s AND scene_id=%s AND scene_id != %s", (current_user.uid, sid, scene_id))
             if cur.fetchone():
                 conn.commit()
                 return Response.fail(code=400, message=f"场景 {sid} 已存在")
         cur.execute(
             f"UPDATE {SCENE_TABLE} SET scene_id=%s, name=%s, trigger=%s, answer_type=%s, answer_template=%s, followup_prompt=%s, updated_at=NOW() "
-            f"WHERE scene_id=%s",
+            f"WHERE uid=%s AND scene_id=%s",
             (sid, name, body.trigger.strip(), answer_type, body.answer_template.strip(),
-             body.followup_prompt.strip(), scene_id),
+             body.followup_prompt.strip(), current_user.uid, scene_id),
         )
         conn.commit()
 
@@ -197,11 +199,11 @@ async def update_scene_template(scene_id: str, body: SceneTemplateCreate, curren
 async def delete_scene_template(scene_id: str, current_user: TokenData = Depends(get_current_user)):
     """删除单条场景模板（删除即停用：判定表将不再包含该场景）。"""
     with _get_pool().connection() as conn, conn.cursor(row_factory=psycopg.rows.dict_row) as cur:
-        cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
+        cur.execute(f"SELECT id FROM {SCENE_TABLE} WHERE uid=%s AND scene_id=%s", (current_user.uid, scene_id))
         if not cur.fetchone():
             conn.commit()
             return Response.fail(code=404, message=f"场景 {scene_id} 不存在")
-        cur.execute(f"DELETE FROM {SCENE_TABLE} WHERE scene_id=%s", (scene_id,))
+        cur.execute(f"DELETE FROM {SCENE_TABLE} WHERE uid=%s AND scene_id=%s", (current_user.uid, scene_id))
         conn.commit()
 
     logger.info(f"[SceneDelete] uid={current_user.uid} 删除场景 scene_id='{scene_id}'")
