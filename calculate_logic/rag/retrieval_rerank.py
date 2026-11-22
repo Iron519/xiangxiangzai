@@ -328,8 +328,8 @@ class CustomRerankClient:
 # ================= PgHybridRetriever =================
 class PgHybridRetriever:
     """PostgreSQL 混合检索器"""
-    def __init__(self, db_config: Dict[str, Any], embedding_client: CustomEmbeddingClient,
-                 rerank_client: Optional[CustomRerankClient] = None,
+    def __init__(self, db_config: Dict[str, Any], embedding_client: Any,
+                 rerank_client: Optional[Any] = None,
                  table_name: str = TABLE_NAME, ts_config: str = TS_CONFIG):
         self.db_config = {
             "host": db_config["host"],
@@ -369,6 +369,43 @@ class PgHybridRetriever:
 
     @classmethod
     def from_env(cls, table_name: str = TABLE_NAME, ts_config: str = TS_CONFIG) -> "PgHybridRetriever":
+        # ── 根据 EMBEDDING_BACKEND 选择 embedding 后端 ──
+        emb_backend = os.getenv("EMBEDDING_BACKEND", "api").lower()
+        if emb_backend == "local":
+            from calculate_logic.rag.bge_backend import LocalBGEEmbedding
+            embedding_client = LocalBGEEmbedding()
+            logger.info("[Retriever] Embedding 后端: local (BGE-m3)")
+        else:
+            embedding_client = CustomEmbeddingClient({
+                "url": BASE_URL,
+                "model": EMBEDDING_MODEL,
+                "accesscode": ACCESSCODE,
+                "max_text_length": MAX_TEXT_LENGTH,
+                "embedding_dim": EMBEDDING_DIM,
+                "timeout": EMBEDDING_TIMEOUT,
+                "verify_ssl": VERIFY_SSL,
+            })
+            logger.info("[Retriever] Embedding 后端: api (qwen-embedding)")
+
+        # ── 根据 RERANK_BACKEND 选择 rerank 后端 ──
+        rnk_backend = os.getenv("RERANK_BACKEND", "api").lower()
+        if rnk_backend == "local":
+            from calculate_logic.rag.bge_backend import LocalBGEReranker
+            rerank_client = LocalBGEReranker()
+            logger.info("[Retriever] Rerank 后端: local (BGE-reranker-v2-m3)")
+        elif RERANK_BASE_URL:
+            rerank_client = CustomRerankClient({
+                "url": RERANK_BASE_URL,
+                "model": RERANK_MODEL,
+                "accesscode": ACCESSCODE,
+                "timeout": RERANK_TIMEOUT,
+                "verify_ssl": VERIFY_SSL,
+            })
+            logger.info("[Retriever] Rerank 后端: api (dashscope)")
+        else:
+            rerank_client = None
+            logger.info("[Retriever] Rerank 后端: 未配置")
+
         return cls(
             db_config={
                 "host": PG_HOST,
@@ -377,22 +414,8 @@ class PgHybridRetriever:
                 "user": PG_USER,
                 "password": PG_PASSWORD,
             },
-            embedding_client=CustomEmbeddingClient({
-                "url": BASE_URL,
-                "model": EMBEDDING_MODEL,
-                "accesscode": ACCESSCODE,
-                "max_text_length": MAX_TEXT_LENGTH,
-                "embedding_dim": EMBEDDING_DIM,
-                "timeout": EMBEDDING_TIMEOUT,
-                "verify_ssl": VERIFY_SSL,
-            }),
-            rerank_client=CustomRerankClient({
-                "url": RERANK_BASE_URL,
-                "model": RERANK_MODEL,
-                "accesscode": ACCESSCODE,
-                "timeout": RERANK_TIMEOUT,
-                "verify_ssl": VERIFY_SSL,
-            }) if RERANK_BASE_URL else None,
+            embedding_client=embedding_client,
+            rerank_client=rerank_client,
             table_name=table_name,
             ts_config=ts_config,
         )

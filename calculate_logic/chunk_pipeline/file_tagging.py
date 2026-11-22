@@ -112,7 +112,8 @@ async def generate_file_description(uid: str, file_name: str, original_name: str
             llm.ainvoke(
                 [SystemMessage(content="你是一个文档分析助手，只输出JSON。"),
                  HumanMessage(content=prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 800},
+                extra_body={"thinking": {"type": "disabled"}},
+                max_tokens=800,
             ),
             timeout=30,
         )

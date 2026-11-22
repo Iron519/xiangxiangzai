@@ -1708,3 +1708,100 @@ if profile:
 ALTER TABLE myagent_user ADD COLUMN IF NOT EXISTS profile jsonb DEFAULT NULL;
 ALTER TABLE myagent_user ADD COLUMN IF NOT EXISTS profile_updated_at timestamptz DEFAULT NULL;
 ```
+
+---
+
+## §17 本地 BGE Embedding & Reranker 部署
+
+### 设计目标
+
+将 Embedding 和 Rerank 从阿里云 API 切到本地 BGE 模型，消除网络延迟（2-6s → 0.2-0.5s），同时支持双后端切换（16GB 机器用本地 BGE，8GB 机器继续用 API）。
+
+### 双后端架构
+
+| 环节 | api 后端（默认） | local 后端 |
+|---|---|---|
+| Embedding | 阿里云 qwen3.7-text-embedding API | 本地 bge-m3（sentence-transformers，CPU） |
+| Rerank | 阿里云 dashscope rerank API | 本地 bge-reranker-v2-m3（CrossEncoder，CPU） |
+| 延迟（稳态） | 2-6s | 0.2s |
+| 首次加载 | 0 | ~7s（模型加载到内存） |
+| 内存占用 | 0 | ~2.3GB（两个模型常驻） |
+| 依赖 | 无额外 | sentence-transformers + torch（CPU 版） |
+
+通过 `.env` 环境变量切换，代码零分支：
+
+```
+EMBEDDING_BACKEND=api    # api | local
+RERANK_BACKEND=api       # api | local
+```
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `EMBEDDING_BACKEND` | `api` | `api`=阿里云 API，`local`=本地 BGE-m3 |
+| `RERANK_BACKEND` | `api` | `api`=阿里云 API，`local`=本地 BGE-reranker |
+| `BGE_EMBEDDING_MODEL` | `BAAI/bge-m3` | 本地 embedding 模型名 |
+| `BGE_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | 本地 reranker 模型名 |
+| `BGE_USE_FP16` | `true` | 是否使用 FP16 半精度（减少内存） |
+| `BGE_DEVICE` | `cpu` | 推理设备（Docker 内只能用 cpu） |
+
+### 部署步骤（16GB 机器）
+
+1. **安装依赖**：
+   ```bash
+   pip install torch --index-url https://download.pytorch.org/whl/cpu  # CPU 版 torch（170MB）
+   pip install sentence-transformers  # 会自动安装 transformers 等
+   ```
+   注意：不要直接 `pip install FlagEmbedding`，它会拉 CUDA 全家桶（几 GB），Docker 内用不上。
+
+2. **下载模型**（通过 modelscope 国内镜像）：
+   ```bash
+   git clone https://www.modelscope.cn/BAAI/bge-m3.git
+   git clone https://www.modelscope.cn/BAAI/bge-reranker-v2-m3.git
+   # 用 git-lfs 拉大文件
+   git lfs install
+   cd bge-m3 && git lfs pull && cd ..
+   cd bge-reranker-v2-m3 && git lfs pull && cd ..
+   ```
+   将模型放到 HuggingFace 缓存目录：
+   ```
+   ~/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/main/
+   ~/.cache/huggingface/hub/models--BAAI--bge-reranker-v2-m3/snapshots/main/
+   ```
+
+3. **设置环境变量**：`.env` 中 `EMBEDDING_BACKEND=local`、`RERANK_BACKEND=local`
+
+4. **重启服务**：首次请求时自动加载模型（~7s），预热阶段会提前加载
+
+5. **重新入库**：切换 embedding 模型后向量空间不兼容，需重新入库所有文档
+
+### 注意事项
+
+- **Docker 容器内无法用 Apple MPS**：MPS 是 macOS 专有 GPU API，容器跑在 Linux 层。BGE 在容器内只能 CPU 模式，但 M4 CPU 性能足够（稳态 ~0.2s）
+- **不要装 FlagEmbedding 库**：它依赖 CUDA 版 torch（几 GB），Docker 内用不上。改用 sentence-transformers + CPU 版 torch
+- **向量空间不兼容**：qwen-embedding 和 bge-m3 虽然都是 1024 维，但向量空间不同，切换后端后必须重新入库
+- **8GB 机器**：默认 `api` 后端，不需要安装 sentence-transformers/torch，内存不够跑两个 BGE 模型
+- **模型懒加载**：首次调用时才加载到内存（~2.3GB），预热阶段会提前加载
+- **同步推理包装**：sentence-transformers 的 encode/predict 是同步阻塞的，用 `run_in_executor` 包装成异步
+- **模型下载**：HuggingFace 在国内可能无法访问，用 modelscope 镜像下载模型
+
+### 实测性能（M4 CPU Docker 内）
+
+| 调用 | 首次（含模型加载） | 稳态（模型已加载） |
+|---|---|---|
+| bge-m3 embedding | 5.6s | **0.23s** |
+| bge-reranker-v2-m3 rerank | 1.5s | **0.19s** |
+| 对比：阿里云 embedding API | — | 2-6.5s |
+| 对比：阿里云 rerank API | — | 2-3s |
+
+### 文件清单
+
+| 文件 | 改动 |
+|---|---|
+| `calculate_logic/rag/bge_backend.py` | **新建**：LocalBGEEmbedding + LocalBGEReranker（sentence-transformers） |
+| `calculate_logic/rag/retrieval_rerank.py` | `from_env()` 工厂方法加后端选择逻辑 |
+| `calculate_logic/chunk_pipeline/embedding.py` | `EmbeddingModel` 加双后端支持（入库侧） |
+| `app/warmup.py` | 预热适配双后端 |
+| `.env` / `.env.example` | 新增 BGE 相关环境变量 |
+| `requirements.txt` | 新增 sentence-transformers + torch（注释标注，8GB 机器可不装） |

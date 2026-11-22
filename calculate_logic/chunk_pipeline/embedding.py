@@ -40,13 +40,17 @@ _embedding_sem = asyncio.Semaphore(2)
 
 
 class EmbeddingModel:
-    """OpenAI 风格 Embedding 客户端（参考 test.py 的 OpenAI 调用方式）。
+    """Embedding 客户端，支持双后端切换。
+
+    后端通过 EMBEDDING_BACKEND 环境变量选择：
+    - api  (默认)：调用阿里云 qwen-embedding API（OpenAI 兼容）
+    - local       ：调用本地 BGE-m3（FlagEmbedding，CPU 模式）
 
     参数从 .env 读取：
-    - ACCESSCODE     : access key（对应 OpenAI api_key）
-    - BASE_URL       : OpenAI 兼容网关（对应 OpenAI base_url）
-    - EMBEDDING_MODEL: 模型名，如 qwen3-embedding-8b
-    - EMBEDDING_DIM  : 向量维度，如 4096（qwen3-embedding-8b 原生输出，不降维）
+    - ACCESSCODE     : access key（对应 OpenAI api_key，api 后端用）
+    - BASE_URL       : OpenAI 兼容网关（api 后端用）
+    - EMBEDDING_MODEL: 模型名（api 后端用）
+    - EMBEDDING_DIM  : 向量维度（api 后端用）
     """
 
     def __init__(
@@ -57,11 +61,23 @@ class EmbeddingModel:
         batch_size: int = 20,
         timeout: float = 30.0,
     ):
+        self.backend = os.getenv("EMBEDDING_BACKEND", "api").lower()
+        self.batch_size = batch_size
+        self.timeout = timeout
+
+        if self.backend == "local":
+            # ── 本地 BGE 后端 ──
+            from calculate_logic.rag.bge_backend import LocalBGEEmbedding
+            self._bge = LocalBGEEmbedding()
+            self.async_client = None  # 无需 API 客户端
+            self.model = self._bge.model_name
+            logger.info(f"[EmbeddingModel] 使用本地 BGE 后端: {self.model}")
+            return
+
+        # ── API 后端（现有逻辑）──
         self.model = (os.getenv("EMBEDDING_MODEL") or model or "").strip()
         self.base_url = (os.getenv("BASE_URL") or base_url or "").strip()
         self.access_code = (os.getenv("ACCESSCODE") or access_code or "").strip()
-        self.batch_size = batch_size
-        self.timeout = timeout
 
         if not self.access_code:
             raise RuntimeError("未在 .env 中找到 ACCESSCODE。")
@@ -87,6 +103,17 @@ class EmbeddingModel:
             logger.info("[Embedding] 跳过：没有可用文本")
             return []
 
+        # ── 本地 BGE 后端：直接批量编码 ──
+        if self.backend == "local":
+            logger.info(f"[Embedding] 本地 BGE 向量化，文本数: {len(clean_texts)}")
+            # 截断超长文本
+            clean_texts = [t[:5000] for t in clean_texts]
+            embeddings = await self._bge.text_embedding(clean_texts)
+            result = [emb.tolist() for emb in embeddings]
+            logger.info(f"[Embedding] 完成，生成向量数: {len(result)}")
+            return result
+
+        # ── API 后端（现有逻辑）──
         logger.info(f"[Embedding] 开始向量化，文本数: {len(clean_texts)}")
         vectors: list[list[float]] = []
         max_chars_per_batch = 5000
@@ -137,6 +164,9 @@ class EmbeddingModel:
         return vectors
 
     async def aclose(self) -> None:
+        if self.backend == "local":
+            await self._bge.close()
+            return
         await self.async_client.close()
 
 

@@ -32,6 +32,13 @@ jieba==0.42.1
 rank-bm25==0.2.2
 numpy==2.5.4
 
+# 本地 BGE embedding + reranker（仅 EMBEDDING_BACKEND=local 时需要，8GB 机器可不装）
+# 安装顺序：先装 torch CPU 版，再装 sentence-transformers
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install sentence-transformers
+# sentence-transformers
+# torch
+
 # 日志
 concurrent-log-handler==0.9.31
 

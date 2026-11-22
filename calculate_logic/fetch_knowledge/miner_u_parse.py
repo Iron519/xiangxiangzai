@@ -60,8 +60,9 @@ async def _get_mineru_http() -> httpx.AsyncClient:
 async def _get_vlm_async_client() -> AsyncOpenAI:
     global _vlm_async_client
     if _vlm_async_client is None:
-        access_code = os.getenv("ACCESSCODE", "")
-        base_url = os.getenv("BASE_URL", "")
+        # VLM 使用独立的 API 地址和密钥（DeepSeek 无视觉模型，VLM 继续用阿里云 qwen）
+        access_code = os.getenv("VLM_API_KEY", "") or os.getenv("ACCESSCODE", "")
+        base_url = os.getenv("VLM_API_BASE", "") or os.getenv("BASE_URL", "")
         _vlm_async_client = AsyncOpenAI(
             api_key=access_code,
             base_url=base_url,

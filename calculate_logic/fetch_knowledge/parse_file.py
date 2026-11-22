@@ -52,7 +52,8 @@ if not logger.handlers:
     logger.setLevel(logging.INFO)
 
 # ================= LLM参数 =================
-REQUIRED_ENV_VARS = ["BASE_URL", "ACCESSCODE", "TEXT_MODEL", "VLM_MODEL", "SOFFICE_PATH"]
+REQUIRED_ENV_VARS = ["BASE_URL", "ACCESSCODE", "TEXT_MODEL", "VLM_MODEL", "SOFFICE_PATH",
+                     "VLM_API_BASE", "VLM_API_KEY"]
 config = {name: os.getenv(name, "").strip() for name in REQUIRED_ENV_VARS}
 
 
@@ -71,6 +72,9 @@ class DocumentParser:
         self.base_url = base_url
         self.text_model = text_model
         self.vlm_model = vlm_model
+        # VLM 使用独立的 API 地址和密钥（DeepSeek 无视觉模型，VLM 继续用阿里云 qwen）
+        self.vlm_api_base = config.get("VLM_API_BASE") or base_url
+        self.vlm_api_key = config.get("VLM_API_KEY") or access_code
         self.soffice_path = soffice_path
         self._api_semaphore = asyncio.Semaphore(max_concurrent_api)
 

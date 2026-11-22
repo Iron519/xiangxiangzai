@@ -87,6 +87,7 @@ def get_llm_client():
             ),
             temperature=0.1,
             top_p=0.1,
+            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
         )
     return _llm_client
 
@@ -111,6 +112,7 @@ def get_fast_llm_client():
             ),
             temperature=0.1,
             top_p=0.1,
+            model_kwargs={"extra_body": {"thinking": {"type": "disabled"}}},
         )
     return _fast_llm_client
 
@@ -354,7 +356,8 @@ async def node_plan_retrieval(state: ChatState) -> ChatState:
             llm.ainvoke(
                 [SystemMessage(content="你是一个检索策略规划器，只输出JSON。"),
                  HumanMessage(content=prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 300},
+                extra_body={"thinking": {"type": "disabled"}},
+                max_tokens=300,
                 config={"tags": ["node_plan_retrieval"]},
             ),
             timeout=15,
@@ -486,7 +489,8 @@ async def _judge_sensitive(query: str) -> str:
         response = await asyncio.wait_for(
             llm_client.ainvoke(
                 [HumanMessage(content=judge_prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 10},
+                extra_body={"thinking": {"type": "disabled"}},
+                max_tokens=10,
             ),
             timeout=10,
         )
@@ -602,7 +606,8 @@ async def _judge_scene(query: str, scenes: list[dict] = None) -> tuple[str, str]
         response = await asyncio.wait_for(
             llm_client.ainvoke(
                 [HumanMessage(content=judge_prompt)],
-                extra_body={"enable_thinking": False, "max_tokens": 10},
+                extra_body={"thinking": {"type": "disabled"}},
+                max_tokens=10,
             ),
             timeout=10,
         )

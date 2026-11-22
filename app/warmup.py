@@ -24,6 +24,24 @@ from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
 logger = logging.getLogger("Warmup")
+if not logger.handlers:
+    import os as _os
+    from pathlib import Path as _Path
+    from concurrent_log_handler import ConcurrentRotatingFileHandler
+    _formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    _console = logging.StreamHandler()
+    _console.setFormatter(_formatter)
+    logger.addHandler(_console)
+    _log_dir = _Path(_os.getenv("WORK_PATH", "/app")) / "logs"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _file = ConcurrentRotatingFileHandler(
+        _log_dir / "warmup.log", "a", 10 * 1024 * 1024, 5,
+        encoding='utf-8', lock_file_directory="/tmp",
+    )
+    _file.setFormatter(_formatter)
+    logger.addHandler(_file)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 
 def _log_elapsed(name: str, t0: float, ok: bool, err: str = ""):
@@ -33,7 +51,7 @@ def _log_elapsed(name: str, t0: float, ok: bool, err: str = ""):
     if err:
         msg += f" — {err}"
     if ok:
-        logger.debug(msg)
+        logger.info(msg)
     else:
         logger.error(msg)
 
@@ -116,22 +134,25 @@ def _warmup_redis_pool():
 # ================================================================
 
 async def _warmup_embedding_api():
-    """预热 Embedding API：实例化 AsyncOpenAI + 发送 1 条最小 embedding 请求建连。
+    """预热 Embedding 后端。
 
-    首次 embedding 调用耗时 ~5s（DNS+TCP+TLS+API处理），预热后后续请求 ~2s。
+    - local 后端：触发模型首次加载（懒加载→预热加载），避免首次请求慢
+    - api   后端：实例化 AsyncOpenAI + 发送 1 条最小 embedding 请求建连
     """
     from calculate_logic.rag.generate_answer import retriever
     t0 = time.time()
     try:
         embeddings = await retriever.embedding_client.text_embedding(["预热"])
-        _log_elapsed(f"Embedding API(返回{len(embeddings)}条)", t0, True)
+        _log_elapsed(f"Embedding 后端(返回{len(embeddings)}条)", t0, True)
     except Exception as e:
-        _log_elapsed("Embedding API", t0, False, str(e))
+        _log_elapsed("Embedding 后端", t0, False, str(e))
 
 
 async def _warmup_rerank_api():
-    """预热 Rerank API：实例化 httpx.AsyncClient + 发送 1 条最小 rerank 请求建连。
+    """预热 Rerank 后端。
 
+    - local 后端：触发模型首次加载
+    - api   后端：实例化 httpx.AsyncClient + 发送 1 条最小 rerank 请求建连
     启动瞬间网络栈可能未完全就绪，连接失败时自动重试 1 次（间隔 2s）。
     即使预热失败也不阻断启动，首次检索时会再次建连。
     """
