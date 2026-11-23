@@ -103,10 +103,13 @@ class MinerUProcessor:
         vlm_model: str = config["VLM_MODEL"],
         display_name: str | None = None,
         uid: str = "",
+        doc_name: str | None = None,
     ):
         self.pdf_path = str(pdf_path)
-        # 用 pdf_path（save_name）做产物目录名，保留后缀，与 upload_kb 和 PG file_name 一致
-        self.file_stem = Path(self.pdf_path).name.replace(" ", "_")
+        # 产物目录名优先用 doc_name（原始文件名，如 pptx），否则用 pdf_path 的文件名
+        # 这是因为 pptx/docx 转 PDF 后 pdf_path 是临时 .pdf 文件，目录名需保留原始扩展名
+        raw_name = doc_name if doc_name else Path(self.pdf_path).name
+        self.file_stem = raw_name.replace(" ", "_")
         self.output_dir = Path(output_dir)
 
         # 支持 uid 子目录：output_dir/{uid}/{file_stem}/

@@ -153,8 +153,8 @@ class DocumentParser:
     # ============================================================
     # PDF 解析，根据内容分别使用MinerU / VLM
     # ============================================================
-    async def _parse_pdf_pipeline(self, file_path: str, display_name: str | None = None, uid: str = "") -> str:
-        minur_u_process = MinerUProcessor(file_path, display_name=display_name, uid=uid)
+    async def _parse_pdf_pipeline(self, file_path: str, display_name: str | None = None, uid: str = "", doc_name: str | None = None) -> str:
+        minur_u_process = MinerUProcessor(file_path, display_name=display_name, uid=uid, doc_name=doc_name)
         all_page_results = []
 
         try:
@@ -203,7 +203,9 @@ class DocumentParser:
             merged = minur_u_process.merge_page_results(all_page_results)
             await minur_u_process.write_anchors_json(merged)
             text = await self._enhance_text_to_markdown(merged.get("md_content", ""))
-            await self._write_merged_md(self._office_output_dir(file_path, display_name, uid), text)
+            # doc_name 优先用于目录名，确保 pptx 等 Office 文件的 parse_result 目录名保留原始扩展名
+            dir_name = doc_name if doc_name else file_path
+            await self._write_merged_md(self._office_output_dir(dir_name, display_name, uid), text)
             return text
 
         except Exception as e:
@@ -221,7 +223,8 @@ class DocumentParser:
                 raise RuntimeError(f"Office→PDF 转换失败: {file_path}")
             if not os.path.exists(pdf_path):
                 raise RuntimeError(f"Office→PDF 未产出文件: {file_path}")
-            text = await self._parse_pdf_pipeline(pdf_path, display_name, uid=uid)
+            # doc_name 传原始文件名（如 .pptx），确保 parse_result 目录名保留原始扩展名
+            text = await self._parse_pdf_pipeline(pdf_path, display_name, uid=uid, doc_name=os.path.basename(file_path))
             if not text:
                 raise RuntimeError(f"Office→PDF→MinerU 解析结果为空: {file_path}")
             return text
