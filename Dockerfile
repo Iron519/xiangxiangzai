@@ -20,4 +20,16 @@ COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --timeout 120 -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
+# 本地 BGE embedding + reranker 依赖（CPU 版 torch，避免拉 CUDA 全家桶）
+# 指定确切版本，避免 pip 依赖解析回溯下载大量历史版本
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --timeout 120 \
+    --index-url https://download.pytorch.org/whl/cpu torch==2.15.0+cpu && \
+    pip install --timeout 120 -i https://mirrors.aliyun.com/pypi/simple/ --no-deps \
+    "transformers==4.46.0" "sentence-transformers==3.3.0" \
+    "huggingface_hub==0.26.2" "tokenizers==0.20.3" \
+    "datasets==2.21.0" sentencepiece==0.2.3 peft==0.22.0 accelerate==1.16.0 && \
+    pip install --timeout 120 -i https://mirrors.aliyun.com/pypi/simple/ \
+    safetensors scipy scikit-learn protobuf filelock sympy fsspec jinja2 mpmath MarkupSafe pyarrow lz4 dill multiprocess aiohttp attrs narwhals rich tqdm typer
+
 CMD ["sleep", "infinity"]
