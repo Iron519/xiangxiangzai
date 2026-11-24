@@ -2552,18 +2552,20 @@
     const needRefresh = tasks.some(t => ['parsed', 'completed'].includes(t.status));
     if (needRefresh && now - _lastFileListRefreshTs > 2000) {
       _lastFileListRefreshTs = now;
-      await loadFileList();
+      await loadFileList(stats ? { success: true, stats } : undefined);
     }
 
     // 无活跃任务时：最后刷新一次文件列表 + 更新统计，然后关闭 SSE
     if (!hasActive) {
-      await loadFileList();
-      // 最终拉一次 stats 确保数据一致
+      // 最终拉一次 stats 确保数据一致，并传给 loadFileList 避免重复请求
       try {
         const res = await apiFetch('/kb/stats');
         const statsData = await res.json();
         if (statsData.success && statsData.stats) updateKpiCardsFromStats(statsData.stats);
-      } catch (e) { /* ignore */ }
+        await loadFileList(statsData);
+      } catch (e) {
+        await loadFileList();
+      }
       stopSSE();
     }
   }
@@ -2749,7 +2751,7 @@
   }
 
 
-  async function loadFileList() {
+  async function loadFileList(cachedStats) {
     const loadingEl = document.getElementById('kbFileListLoading');
     const emptyEl   = document.getElementById('kbFileListEmpty');
     const tableEl   = document.getElementById('kbFileListTable');
@@ -2773,10 +2775,13 @@
       const kbUpdatedEl = document.getElementById('kbLastUpdated');
       if (kbUpdatedEl) kbUpdatedEl.textContent = `数据更新于 ${new Date().toLocaleTimeString('zh-CN')}`;
 
-      // 更新 KPI 统计卡片 —— 优先用后端 stats 接口（直接从 PG 聚合），文件列表计算作为兜底
+      // 更新 KPI 统计卡片 —— 优先用传入的 cachedStats（避免重复请求），否则才拉 /kb/stats
       try {
-        const statsRes = await apiFetch('/kb/stats');
-        const statsData = await statsRes.json();
+        let statsData = cachedStats;
+        if (!statsData) {
+          const statsRes = await apiFetch('/kb/stats');
+          statsData = await statsRes.json();
+        }
         if (statsData.success && statsData.stats) {
           updateKpiCardsFromStats(statsData.stats);
         } else {
